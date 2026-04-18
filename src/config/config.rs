@@ -2,7 +2,7 @@
 // config/config.rs - Application Configuration
 // =============================================================================
 //
-// 🎛️ WHAT IS THIS?
+// WHAT IS THIS?
 // This is like the settings panel on a TV remote.
 // It reads our configuration file (config/default.toml) and turns those
 // settings into Rust structs we can use in our code.
