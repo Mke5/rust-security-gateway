@@ -1,0 +1,53 @@
+# rust-gateway configuration file
+# This is like the settings panel for our security guard
+
+[server]
+# The address our gateway listens on
+# "0.0.0.0" means "listen on all network interfaces"
+# 3000 is the port number (like a door number on a building)
+host = "0.0.0.0"
+port = 3000
+
+[backend]
+# The URL of the backend server we are protecting and forwarding to
+# When running locally, we use a test backend on port 8080
+url = "http://localhost:8080"
+# How many seconds to wait before giving up on a backend request
+timeout_seconds = 30
+
+[rate_limit]
+# Maximum number of requests allowed per IP per window
+max_requests = 100
+# The time window in seconds (60 = 1 minute)
+window_seconds = 60
+
+[cache]
+# How long to keep cached responses (in seconds)
+ttl_seconds = 300
+# Maximum number of items to store in the cache
+max_items = 1000
+
+[ip_filter]
+# List of IPs that are ALWAYS blocked (blacklist)
+blacklist = ["192.168.1.100", "10.0.0.1"]
+# If whitelist is not empty, ONLY these IPs are allowed
+# Leave empty to allow all IPs (except blacklisted ones)
+whitelist = []
+
+[bot_detection]
+# If a request has no User-Agent header, block it
+block_missing_user_agent = true
+# List of User-Agent strings known to be bots or bad actors
+bad_user_agents = [
+    "sqlmap",
+    "nikto",
+    "masscan",
+    "zgrab",
+    "nmap",
+    "python-requests/2.18",
+    "curl/7.54",
+]
+
+[waf]
+# Maximum size of request body in bytes (1MB = 1,048,576 bytes)
+max_body_size = 1048576
