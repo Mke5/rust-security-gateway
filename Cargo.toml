@@ -1,0 +1,57 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Axum - our web framework (like the skeleton of our server)
+axum = { version = "0.7", features = ["macros"] }
+
+# Tokio - lets us do many things at once (like a super-fast multitasker)
+tokio = { version = "1", features = ["full"] }
+
+# Tower - lets us stack middleware layers (like stacking security checkpoints)
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# Hyper - the HTTP engine under the hood (like the engine in a car)
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+
+# Reqwest - HTTP client to forward requests to the backend
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serde - for reading/writing config files (JSON/TOML parser)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Regex - for pattern matching (to catch SQL injection, XSS, etc.)
+regex = "1"
+
+# DashMap - a fast, thread-safe HashMap (like a super-powered dictionary)
+dashmap = "5"
+
+# Tracing - for logging what our gateway is doing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+# For reading config from files or environment
+config = "0.14"
+toml = "0.8"
+
+# Lazy static initialization
+once_cell = "1"
+
+# UUID for unique identifiers
+uuid = { version = "1", features = ["v4"] }
+
+# Bytes - efficient byte buffer handling
+bytes = "1"
+
+[dev-dependencies]
+# For writing tests
+tokio-test = "0.4"
