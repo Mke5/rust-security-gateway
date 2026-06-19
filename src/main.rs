@@ -17,12 +17,10 @@ use axum::{
     http::{HeaderValue, StatusCode},
     routing::{any, get},
 };
-
 use serde::Serialize;
-
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 use tower_http::{
     cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, SetRequestIdLayer},
@@ -42,7 +40,8 @@ use security::waf::Waf;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<AppConfig>,
+    pub config: Arc<RwLock<AppConfig>>,
+    pub config_path: String,
     pub ip_filter: Arc<IpFilter>,
     pub rate_limiter: Arc<RateLimiter>,
     pub bot_detector: Arc<BotDetector>,
@@ -87,11 +86,12 @@ async fn main() {
 
     info!("Starting Rust Security Gateway...");
 
-    let config = Arc::new(
-        AppConfig::load().expect("Failed to load configuration. Check config/default.toml"),
-    );
+    let config_path = std::env::var("CONFIG_PATH")
+        .unwrap_or_else(|_| "config/default.toml".to_string());
+    let cfg = AppConfig::load_from(&config_path)
+        .expect("Failed to load configuration");
 
-    config.validate().unwrap_or_else(|errors| {
+    cfg.validate().unwrap_or_else(|errors| {
         panic!(
             "Configuration validation failed:\n  {}",
             errors.join("\n  ")
@@ -101,9 +101,14 @@ async fn main() {
     info!("Configuration loaded and validated successfully");
     info!(
         "   Gateway listening on: {}:{}",
-        config.server.host, config.server.port
+        cfg.server.host, cfg.server.port
     );
-    info!("   Forwarding to backend: {}", config.backend.url);
+    for url in &cfg.backend.urls {
+        info!("   Forwarding to backend: {}", url);
+    }
+    if cfg.backend.urls.is_empty() {
+        info!("   Forwarding to backend: {}", cfg.backend.url);
+    }
 
     let start_time = Arc::new(std::time::SystemTime::now());
 
@@ -113,29 +118,29 @@ async fn main() {
 
     // IP Filter
     let ip_filter = Arc::new(IpFilter::new(
-        config.ip_filter.blacklist.clone(),
-        config.ip_filter.whitelist.clone(),
+        cfg.ip_filter.blacklist.clone(),
+        cfg.ip_filter.whitelist.clone(),
     ));
     info!(
         "IP Filter initialized ({} blacklisted, {} whitelisted)",
-        config.ip_filter.blacklist.len(),
-        config.ip_filter.whitelist.len()
+        cfg.ip_filter.blacklist.len(),
+        cfg.ip_filter.whitelist.len()
     );
 
     // Rate Limiter
     let rate_limiter = Arc::new(RateLimiter::new(
-        config.rate_limit.max_requests,
-        config.rate_limit.window_seconds,
+        cfg.rate_limit.max_requests,
+        cfg.rate_limit.window_seconds,
     ));
     info!(
         "Rate Limiter initialized ({} req/{} sec)",
-        config.rate_limit.max_requests, config.rate_limit.window_seconds
+        cfg.rate_limit.max_requests, cfg.rate_limit.window_seconds
     );
 
     // Bot Detector
     let bot_detector = Arc::new(BotDetector::new(
-        config.bot_detection.block_missing_user_agent,
-        config.bot_detection.bad_user_agents.clone(),
+        cfg.bot_detection.block_missing_user_agent,
+        cfg.bot_detection.bad_user_agents.clone(),
     ));
     info!("Bot Detector initialized");
 
@@ -144,44 +149,44 @@ async fn main() {
     info!("Web Application Firewall initialized");
 
     // Request Validator
-    let request_validator = Arc::new(RequestValidator::new(config.waf.max_body_size));
+    let request_validator = Arc::new(RequestValidator::new(cfg.waf.max_body_size));
     info!(
         "Request Validator initialized (max body: {} bytes)",
-        config.waf.max_body_size
+        cfg.waf.max_body_size
     );
 
     // Cache
     let cache = Arc::new(ResponseCache::new(
-        config.cache.max_items,
-        config.cache.ttl_seconds,
+        cfg.cache.max_items,
+        cfg.cache.ttl_seconds,
     ));
     info!(
         "Response Cache initialized (TTL: {} sec, max: {} items)",
-        config.cache.ttl_seconds, config.cache.max_items
+        cfg.cache.ttl_seconds, cfg.cache.max_items
     );
 
     // Proxy Handler with upstream pool, retries, and circuit breaker
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(config.backend.timeout_seconds))
-        .pool_max_idle_per_host(config.pool.max_idle_per_host)
-        .pool_idle_timeout(Duration::from_secs(config.pool.idle_timeout_secs))
+        .timeout(Duration::from_secs(cfg.backend.timeout_seconds))
+        .pool_max_idle_per_host(cfg.pool.max_idle_per_host)
+        .pool_idle_timeout(Duration::from_secs(cfg.pool.idle_timeout_secs))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("RustGateway/1.0")
         .build()
         .expect("Failed to build HTTP client");
 
     let retry_policy = RetryPolicy::new(
-        config.backend.retry.max_retries,
-        config.backend.retry.base_delay_ms,
+        cfg.backend.retry.max_retries,
+        cfg.backend.retry.base_delay_ms,
     );
 
-    let cb = &config.backend.circuit_breaker;
-    let backend_urls = if !config.backend.urls.is_empty() {
-        config.backend.urls.clone()
+    let cb = &cfg.backend.circuit_breaker;
+    let backend_urls = if !cfg.backend.urls.is_empty() {
+        cfg.backend.urls.clone()
     } else {
-        vec![config.backend.url.clone()]
+        vec![cfg.backend.url.clone()]
     };
-    let load_balancer = match config.backend.load_balancing.strategy.as_str() {
+    let load_balancer = match cfg.backend.load_balancing.strategy.as_str() {
         "least_connections" => LoadBalancer::LeastConnections,
         _ => LoadBalancer::RoundRobin,
     };
@@ -201,9 +206,9 @@ async fn main() {
     info!(
         "Proxy Handler initialized (backends: {} urls, strategy: {}, retries: {}, circuit breaker: {})",
         pool.upstreams().len(),
-        config.backend.load_balancing.strategy,
-        config.backend.retry.max_retries,
-        if config.backend.circuit_breaker.enabled {
+        cfg.backend.load_balancing.strategy,
+        cfg.backend.retry.max_retries,
+        if cfg.backend.circuit_breaker.enabled {
             "on"
         } else {
             "off"
@@ -211,8 +216,8 @@ async fn main() {
     );
 
     // Active health checks — background task that probes upstreams periodically
-    if config.backend.health_check.enabled {
-        let hc = config.backend.health_check.clone();
+    if cfg.backend.health_check.enabled {
+        let hc = cfg.backend.health_check.clone();
         let checker = proxy::health::HealthChecker::new(
             pool.clone(),
             client.clone(),
@@ -229,12 +234,12 @@ async fn main() {
         );
     }
 
-    let hsts_header = if config.tls.enabled && config.tls.hsts.enabled {
-        let mut value = format!("max-age={}", config.tls.hsts.max_age);
-        if config.tls.hsts.include_subdomains {
+    let hsts_header = if cfg.tls.enabled && cfg.tls.hsts.enabled {
+        let mut value = format!("max-age={}", cfg.tls.hsts.max_age);
+        if cfg.tls.hsts.include_subdomains {
             value.push_str("; includeSubDomains");
         }
-        if config.tls.hsts.preload {
+        if cfg.tls.hsts.preload {
             value.push_str("; preload");
         }
         Some(HeaderValue::from_str(&value).expect("Invalid HSTS header value"))
@@ -243,7 +248,8 @@ async fn main() {
     };
 
     let state = AppState {
-        config: config.clone(),
+        config: Arc::new(RwLock::new(cfg.clone())),
+        config_path: config_path.clone(),
         ip_filter,
         rate_limiter,
         bot_detector,
@@ -255,6 +261,13 @@ async fn main() {
         start_time,
         hsts_header,
     };
+
+    // Spawn SIGHUP listener for config reload
+    let reload_state = state.clone();
+    let reload_path = config_path.clone();
+    tokio::spawn(async move {
+        sighup_listener(reload_state, &reload_path).await;
+    });
 
     // Build router with health/metrics endpoints BEFORE the catch-all proxy route
     let mut app = Router::new()
@@ -310,31 +323,25 @@ async fn main() {
         ));
 
     // Add CORS layer if enabled
-    if config.cors.enabled {
-        let methods: Vec<axum::http::Method> = config
-            .cors
-            .allowed_methods
+    if cfg.cors.enabled {
+        let methods: Vec<axum::http::Method> = cfg.cors.allowed_methods
             .iter()
             .filter_map(|m| m.parse().ok())
             .collect();
-        let headers: Vec<axum::http::HeaderName> = config
-            .cors
-            .allowed_headers
+        let headers: Vec<axum::http::HeaderName> = cfg.cors.allowed_headers
             .iter()
             .filter_map(|h| h.parse().ok())
             .collect();
 
-        let cors = if config.cors.allowed_origins.is_empty() {
+        let cors = if cfg.cors.allowed_origins.is_empty() {
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(methods)
                 .allow_headers(headers)
-                .allow_credentials(config.cors.allow_credentials)
-                .max_age(Duration::from_secs(config.cors.max_age_secs))
+                .allow_credentials(cfg.cors.allow_credentials)
+                .max_age(Duration::from_secs(cfg.cors.max_age_secs))
         } else {
-            let origins: Vec<HeaderValue> = config
-                .cors
-                .allowed_origins
+            let origins: Vec<HeaderValue> = cfg.cors.allowed_origins
                 .iter()
                 .filter_map(|o| HeaderValue::from_str(o).ok())
                 .collect();
@@ -342,8 +349,8 @@ async fn main() {
                 .allow_origin(origins)
                 .allow_methods(methods)
                 .allow_headers(headers)
-                .allow_credentials(config.cors.allow_credentials)
-                .max_age(Duration::from_secs(config.cors.max_age_secs))
+                .allow_credentials(cfg.cors.allow_credentials)
+                .max_age(Duration::from_secs(cfg.cors.max_age_secs))
         };
         app = app.layer(cors);
         info!("CORS middleware enabled");
@@ -351,11 +358,11 @@ async fn main() {
 
     let app = app.with_state(state);
 
-    let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
+    let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)
         .parse()
         .expect("Invalid server address in config");
 
-    if config.tls.enabled {
+    if cfg.tls.enabled {
         info!("TLS is enabled, starting HTTPS server...");
         info!("Gateway is LIVE and listening on https://{}", addr);
         info!("Health endpoint: https://{}/health", addr);
@@ -363,7 +370,7 @@ async fn main() {
         info!("Liveness endpoint: https://{}/live", addr);
 
         let tls_config =
-            tls::create_tls_config(&config.tls).expect("Failed to create TLS configuration");
+            tls::create_tls_config(&cfg.tls).expect("Failed to create TLS configuration");
 
         tls::serve_tls(app, addr, tls_config, shutdown_signal()).await;
     } else {
@@ -457,6 +464,36 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received, gracefully shutting down...");
+}
+
+/// Listen for SIGHUP and reload configuration
+#[cfg(unix)]
+async fn sighup_listener(state: AppState, config_path: &str) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sig = signal(SignalKind::hangup()).expect("failed to install SIGHUP handler");
+    info!("SIGHUP config reload listener installed");
+    loop {
+        sig.recv().await;
+        info!("SIGHUP received, reloading configuration...");
+        reload_config(&state, config_path).await;
+    }
+}
+
+/// Reload configuration from disk and update shared state
+async fn reload_config(state: &AppState, config_path: &str) {
+    match AppConfig::load_from(config_path) {
+        Ok(new_config) => {
+            info!("Config file reloaded successfully");
+            // Update the shared config
+            let mut cfg = state.config.write().await;
+            *cfg = new_config;
+            info!("Configuration hot-reloaded. Some changes may require a restart to take full effect.");
+        }
+        Err(e) => {
+            error!("Failed to reload config: {}. Keeping previous configuration.", e);
+        }
+    }
 }
 
 async fn handle_request(
@@ -819,7 +856,8 @@ mod tests {
             .route("/", any(handle_request))
             .route("/*path", any(handle_request))
             .with_state(AppState {
-                config: Arc::new(AppConfig::default()),
+                config: Arc::new(RwLock::new(AppConfig::default())),
+                config_path: "config/default.toml".to_string(),
                 ip_filter: Arc::new(IpFilter::new(vec![], vec![])),
                 rate_limiter: Arc::new(RateLimiter::new(100, 60)),
                 bot_detector: Arc::new(BotDetector::new(false, vec![])),
