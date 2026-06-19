@@ -176,14 +176,238 @@ impl AppConfig {
     pub fn listen_addr(&self) -> String {
         format!("{}:{}", self.server.host, self.server.port)
     }
+
+    /// Validate all configuration values at startup.
+    /// Returns a list of all validation errors found.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.server.host.is_empty() {
+            errors.push("server.host must not be empty".to_string());
+        }
+        if self.server.port == 0 {
+            errors.push("server.port must be non-zero".to_string());
+        }
+
+        if self.backend.url.is_empty() {
+            errors.push("backend.url must not be empty".to_string());
+        }
+        if !self.backend.url.starts_with("http://") && !self.backend.url.starts_with("https://") {
+            errors.push("backend.url must start with http:// or https://".to_string());
+        }
+        if self.backend.timeout_seconds == 0 {
+            errors.push("backend.timeout_seconds must be > 0".to_string());
+        }
+        if self.rate_limit.max_requests == 0 {
+            errors.push("rate_limit.max_requests must be > 0".to_string());
+        }
+        if self.rate_limit.window_seconds == 0 {
+            errors.push("rate_limit.window_seconds must be > 0".to_string());
+        }
+        if self.cache.ttl_seconds == 0 {
+            errors.push("cache.ttl_seconds must be > 0".to_string());
+        }
+        if self.cache.max_items == 0 {
+            errors.push("cache.max_items must be > 0".to_string());
+        }
+        if self.waf.max_body_size == 0 {
+            errors.push("waf.max_body_size must be > 0".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_load_valid() {
+        let config = AppConfig::default();
+        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.backend.url, "http://localhost:8080");
+        assert_eq!(config.rate_limit.max_requests, 100);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validate_port_zero() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("port")));
+    }
+
+    #[test]
+    fn test_config_validate_empty_backend_url() {
+        let mut config = AppConfig::default();
+        config.backend.url = String::new();
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("backend.url")));
+    }
+
+    #[test]
+    fn test_config_validate_invalid_backend_url() {
+        let mut config = AppConfig::default();
+        config.backend.url = "ftp://backend".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("backend.url")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_timeout() {
+        let mut config = AppConfig::default();
+        config.backend.timeout_seconds = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("timeout")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_max_requests() {
+        let mut config = AppConfig::default();
+        config.rate_limit.max_requests = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("max_requests")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_window() {
+        let mut config = AppConfig::default();
+        config.rate_limit.window_seconds = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("window_seconds")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_ttl() {
+        let mut config = AppConfig::default();
+        config.cache.ttl_seconds = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("ttl_seconds")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_max_items() {
+        let mut config = AppConfig::default();
+        config.cache.max_items = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("max_items")));
+    }
+
+    #[test]
+    fn test_config_validate_zero_body_size() {
+        let mut config = AppConfig::default();
+        config.waf.max_body_size = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("max_body_size")));
+    }
+
+    #[test]
+    fn test_config_load_from_file() {
+        // Write a temp config file
+        let content = r#"
+[server]
+host = "127.0.0.1"
+port = 9090
+
+[backend]
+url = "http://test:3000"
+timeout_seconds = 15
+
+[rate_limit]
+max_requests = 50
+window_seconds = 30
+
+[cache]
+ttl_seconds = 60
+max_items = 500
+
+[ip_filter]
+blacklist = []
+whitelist = []
+
+[bot_detection]
+block_missing_user_agent = false
+bad_user_agents = ["test-bot"]
+
+[waf]
+max_body_size = 512000
+"#;
+        let path = "/tmp/test_config.toml";
+        std::fs::write(path, content).unwrap();
+        let config = AppConfig::load_from(path).unwrap();
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.port, 9090);
+        assert_eq!(config.backend.url, "http://test:3000");
+        assert_eq!(config.backend.timeout_seconds, 15);
+        assert_eq!(config.rate_limit.max_requests, 50);
+        assert_eq!(config.rate_limit.window_seconds, 30);
+        assert_eq!(config.cache.ttl_seconds, 60);
+        assert_eq!(config.cache.max_items, 500);
+        assert_eq!(config.bot_detection.block_missing_user_agent, false);
+        assert_eq!(config.waf.max_body_size, 512000);
+        assert!(config.validate().is_ok());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_config_load_from_file_invalid() {
+        let path = "/tmp/test_config_invalid.toml";
+        std::fs::write(path, "invalid toml content {{{").unwrap();
+        let result = AppConfig::load_from(path);
+        assert!(result.is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_listen_addr() {
+        let config = AppConfig::default();
+        assert_eq!(config.listen_addr(), "0.0.0.0:3000");
+    }
+
+    #[test]
+    fn test_multiple_validation_errors() {
+        let mut config = AppConfig::default();
+        config.server.port = 0;
+        config.backend.timeout_seconds = 0;
+        config.cache.max_items = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.len() >= 3);
+    }
 }
 
 // =============================================================================
 // Default Configuration
 // =============================================================================
-// If we can't read the config file, use these safe defaults.
-// This is like having a "factory reset" option.
-//
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {

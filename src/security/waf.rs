@@ -122,20 +122,8 @@ static CMD_INJECTION_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
 });
 
 // =============================================================================
-// WAF Rule Definition
+// The Web Application Firewall
 // =============================================================================
-
-/// Represents a single WAF rule with its category and description
-struct WafRule {
-    /// What type of attack this rule detects
-    category: &'static str,
-    /// Human-readable description
-    description: &'static str,
-    /// The compiled regex patterns for this rule
-    patterns: &'static Lazy<Vec<Regex>>,
-}
-
-/// The Web Application Firewall
 pub struct Waf {
     // The WAF uses global static regex patterns (defined above)
     // No mutable state needed - rules are compiled once at startup

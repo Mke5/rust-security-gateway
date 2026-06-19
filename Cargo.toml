@@ -12,7 +12,7 @@ tokio = { version = "1", features = ["full"] }
 
 # Tower - lets us stack middleware layers (like stacking security checkpoints)
 tower = { version = "0.4", features = ["full"] }
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "request-id"] }
 
 # Hyper - the HTTP engine under the hood (like the engine in a car)
 hyper = { version = "1", features = ["full"] }
@@ -29,18 +29,10 @@ serde_json = "1"
 # Regex - for pattern matching (to catch SQL injection, XSS, etc.)
 regex = "1"
 
-# DashMap - a fast, thread-safe HashMap (like a super-powered dictionary)
-dashmap = "5"
-
 # Tracing - for logging what our gateway is doing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Time utilities
-chrono = { version = "0.4", features = ["serde"] }
-
-# For reading config from files or environment
-config = "0.14"
 toml = "0.8"
 
 # Lazy static initialization
