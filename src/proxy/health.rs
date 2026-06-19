@@ -84,7 +84,7 @@ impl HealthChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proxy::upstream::RetryPolicy;
+    use crate::proxy::upstream::{LoadBalancer, RetryPolicy};
 
     #[tokio::test]
     async fn test_health_checker_record_failure_on_bad_host() {
@@ -93,6 +93,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             1,
             Duration::from_secs(1),
+            LoadBalancer::RoundRobin,
         ));
 
         let client = Client::builder()
@@ -115,6 +116,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             2,
             Duration::from_secs(10),
+            LoadBalancer::RoundRobin,
         ));
 
         let client = Client::builder()
@@ -143,6 +145,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             5,
             Duration::from_secs(30),
+            LoadBalancer::RoundRobin,
         ));
 
         let client = Client::builder()
@@ -163,6 +166,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             5,
             Duration::from_secs(30),
+            LoadBalancer::RoundRobin,
         ));
         let client = Client::builder().build().unwrap();
         let checker = HealthChecker::new(pool.clone(), client, 10, 5, "/api/health".to_string());

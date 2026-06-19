@@ -6,34 +6,29 @@ mod proxy;
 mod security;
 mod tls;
 
-// Standard library imports
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-// Axum - our web framework
 use axum::{
     Json, Router,
     extract::State,
+    http::{HeaderValue, StatusCode},
     routing::{any, get},
 };
 
-use axum::http::StatusCode;
-
 use serde::Serialize;
 
-// Logging
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-// Tower HTTP middleware
 use tower_http::{
+    cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, SetRequestIdLayer},
     trace::TraceLayer,
 };
 
-// Our own modules
 use cache::cache::ResponseCache;
 use config::config::AppConfig;
 use metrics::Metrics;
@@ -42,7 +37,7 @@ use middleware::{
     request_validation::RequestValidator,
 };
 use proxy::forward::ProxyHandler;
-use proxy::upstream::{RetryPolicy, UpstreamPool};
+use proxy::upstream::{LoadBalancer, RetryPolicy, UpstreamPool};
 use security::waf::Waf;
 
 #[derive(Clone)]
@@ -57,6 +52,7 @@ pub struct AppState {
     pub proxy_handler: Arc<ProxyHandler>,
     pub metrics: Arc<Metrics>,
     pub start_time: Arc<std::time::SystemTime>,
+    pub hsts_header: Option<HeaderValue>,
 }
 
 #[derive(Serialize)]
@@ -80,12 +76,13 @@ struct LivenessResponse {
 
 #[tokio::main]
 async fn main() {
+    // Initialize tracing subscriber before loading config to capture startup logs
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "rust_gateway=debug,tower_http=debug".into());
+
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "rust_gateway=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().json())
         .init();
 
     info!("Starting Rust Security Gateway...");
@@ -166,8 +163,8 @@ async fn main() {
     // Proxy Handler with upstream pool, retries, and circuit breaker
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.backend.timeout_seconds))
-        .pool_max_idle_per_host(32)
-        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(config.pool.max_idle_per_host)
+        .pool_idle_timeout(Duration::from_secs(config.pool.idle_timeout_secs))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("RustGateway/1.0")
         .build()
@@ -179,8 +176,17 @@ async fn main() {
     );
 
     let cb = &config.backend.circuit_breaker;
-    let pool = Arc::new(UpstreamPool::from_url(
-        config.backend.url.clone(),
+    let backend_urls = if !config.backend.urls.is_empty() {
+        config.backend.urls.clone()
+    } else {
+        vec![config.backend.url.clone()]
+    };
+    let load_balancer = match config.backend.load_balancing.strategy.as_str() {
+        "least_connections" => LoadBalancer::LeastConnections,
+        _ => LoadBalancer::RoundRobin,
+    };
+    let pool = Arc::new(UpstreamPool::new(
+        backend_urls,
         retry_policy,
         if cb.enabled {
             cb.failure_threshold
@@ -188,12 +194,14 @@ async fn main() {
             u32::MAX
         },
         Duration::from_secs(cb.recovery_timeout_secs),
+        load_balancer,
     ));
 
     let proxy_handler = Arc::new(ProxyHandler::new(client.clone(), pool.clone()));
     info!(
-        "Proxy Handler initialized (backend: {}, retries: {}, circuit breaker: {})",
-        config.backend.url,
+        "Proxy Handler initialized (backends: {} urls, strategy: {}, retries: {}, circuit breaker: {})",
+        pool.upstreams().len(),
+        config.backend.load_balancing.strategy,
         config.backend.retry.max_retries,
         if config.backend.circuit_breaker.enabled {
             "on"
@@ -221,6 +229,19 @@ async fn main() {
         );
     }
 
+    let hsts_header = if config.tls.enabled && config.tls.hsts.enabled {
+        let mut value = format!("max-age={}", config.tls.hsts.max_age);
+        if config.tls.hsts.include_subdomains {
+            value.push_str("; includeSubDomains");
+        }
+        if config.tls.hsts.preload {
+            value.push_str("; preload");
+        }
+        Some(HeaderValue::from_str(&value).expect("Invalid HSTS header value"))
+    } else {
+        None
+    };
+
     let state = AppState {
         config: config.clone(),
         ip_filter,
@@ -232,10 +253,11 @@ async fn main() {
         proxy_handler,
         metrics,
         start_time,
+        hsts_header,
     };
 
     // Build router with health/metrics endpoints BEFORE the catch-all proxy route
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/live", get(live_handler))
@@ -285,8 +307,49 @@ async fn main() {
         .layer(SetRequestIdLayer::new(
             axum::http::HeaderName::from_static("x-request-id"),
             MakeRequestUuid,
-        ))
-        .with_state(state);
+        ));
+
+    // Add CORS layer if enabled
+    if config.cors.enabled {
+        let methods: Vec<axum::http::Method> = config
+            .cors
+            .allowed_methods
+            .iter()
+            .filter_map(|m| m.parse().ok())
+            .collect();
+        let headers: Vec<axum::http::HeaderName> = config
+            .cors
+            .allowed_headers
+            .iter()
+            .filter_map(|h| h.parse().ok())
+            .collect();
+
+        let cors = if config.cors.allowed_origins.is_empty() {
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(methods)
+                .allow_headers(headers)
+                .allow_credentials(config.cors.allow_credentials)
+                .max_age(Duration::from_secs(config.cors.max_age_secs))
+        } else {
+            let origins: Vec<HeaderValue> = config
+                .cors
+                .allowed_origins
+                .iter()
+                .filter_map(|o| HeaderValue::from_str(o).ok())
+                .collect();
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods(methods)
+                .allow_headers(headers)
+                .allow_credentials(config.cors.allow_credentials)
+                .max_age(Duration::from_secs(config.cors.max_age_secs))
+        };
+        app = app.layer(cors);
+        info!("CORS middleware enabled");
+    }
+
+    let app = app.with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
@@ -766,6 +829,7 @@ mod tests {
                 proxy_handler: Arc::new(ProxyHandler::new(client, pool)),
                 metrics: Arc::new(Metrics::new().unwrap()),
                 start_time: Arc::new(std::time::SystemTime::now()),
+                hsts_header: None,
             })
     }
 }

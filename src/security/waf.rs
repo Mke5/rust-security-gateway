@@ -113,6 +113,108 @@ static CMD_INJECTION_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
         r"(?i)\b(wget|curl)\s+https?://",
         // Shell redirection to sensitive files
         r">\s*/etc/|>>\s*/etc/",
+        // PowerShell commands
+        r"(?i)(powershell|pwsh)\s+(-Command|-c|-EncodedCommand|-e)\s",
+        // Environment variable expansion
+        r"(?i)\$\{[A-Z_]+\}|\$\([A-Z_]+\)",
+    ];
+
+    patterns
+        .into_iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+});
+
+// =============================================================================
+// LFI (Local File Inclusion) patterns
+// =============================================================================
+static LFI_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
+    let patterns = vec![
+        // PHP wrappers
+        r"(?i)(php://|file://|phar://|zip://|compress\.zlib|compress\.bzip2)",
+        // Directory traversal with file read
+        r"\.\./\.\./(etc|proc|var|usr|windows|boot|sys)",
+        // PHP filter chains for LFI
+        r"(?i)(include|require|include_once|require_once)\s*\(?\s*\$",
+        // Null byte injection (old PHP)
+        r"%00",
+        // Specific sensitive file reads via LFI
+        r"(?i)(\.\./)*(etc/passwd|etc/shadow|etc/hosts|proc/self/environ|proc/self/fd)",
+    ];
+
+    patterns
+        .into_iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+});
+
+// =============================================================================
+// RFI (Remote File Inclusion) patterns
+// =============================================================================
+static RFI_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
+    let patterns = vec![
+        // HTTP(S) includes in PHP
+        r#"(?i)(include|require|include_once|require_once)\s*\(?\s*['"]https?://"#,
+        // Data URIs for code injection
+        r"(?i)data://(text/plain|text/html|application/x-php)",
+        // Remote URL in file functions
+        r#"(?i)(fopen|file_get_contents|readfile|file_put_contents)\s*\(?\s*['"]https?://"#,
+        // Allow_url_include exploitation
+        r"(?i)allow_url_include\s*=\s*(1|on|true)",
+    ];
+
+    patterns
+        .into_iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+});
+
+// =============================================================================
+// SSTI (Server-Side Template Injection) patterns
+// =============================================================================
+static SSTI_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
+    let patterns = vec![
+        // Jinja2 / Twig / Django template injection
+        r"\{\{[\s\S]*?(config|request|app|self|class|mro|subclasses|builtins).*?\}\}",
+        // Java/Thymeleaf expressions
+        r"(?i)\$\{.*?(java|runtime|exec|process|class\.forname|getruntime).*?\}",
+        // Pug/Unkown expressions
+        r"#\{[\s\S]*?(process|require|global|constructor|prototype).*?\}",
+        // Velocity / FreeMarker
+        r"(?i)\$\{.*?(exec|fork|include|parse|eval).*?\}",
+        // Ruby ERB injections
+        r"<%=?\s*[\s\S]*?(system|exec|fork|open|\`|\%x).*?%>",
+        // Smarty PHP template injection
+        r"(?i)\{php\}[\s\S]*?\{\/php\}",
+        // Generic SSTI attempts
+        r"(?i)(\{\{|\$\{|\%\{|<%=).*(class|super|mro|config|app|self\.__).*(}}|\}|%>|})",
+    ];
+
+    patterns
+        .into_iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+});
+
+// =============================================================================
+// RCE (Remote Code Execution) patterns
+// =============================================================================
+static RCE_REGEX: Lazy<Vec<Regex>> = Lazy::new(|| {
+    let patterns = vec![
+        // PHP code execution functions
+        r"(?i)(eval|assert|system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec)\s*\(",
+        // Java runtime exec
+        r"(?i)(runtime\.exec|runtime\.getruntime|processbuilder)",
+        // Python code execution
+        r"(?i)(__import__|__builtins__|__globals__|compile\s*\(|exec\s*\()",
+        // Ruby code execution
+        r"(?i)(eval|instance_eval|class_eval|module_eval|send)\s*\(",
+        // Node.js code execution
+        r#"(?i)(process\.binding|process\.mainModule|require\s*\(['"]child_process)"#,
+        // Serialization-based RCE
+        r"(?i)(O:\d+:|C:\d+:|\x00\x00|\x00\*\x00).{0,100}(eval|exec|system)",
+        // Perl/PHP regex eval
+        r"(?i)(/e\b|preg_replace.*\/[^\/]*e[^\/]*\/)",
     ];
 
     patterns
@@ -137,10 +239,21 @@ impl Waf {
         let xss_count = XSS_REGEX.len();
         let path_count = PATH_TRAVERSAL_REGEX.len();
         let cmd_count = CMD_INJECTION_REGEX.len();
+        let lfi_count = LFI_REGEX.len();
+        let rfi_count = RFI_REGEX.len();
+        let ssti_count = SSTI_REGEX.len();
+        let rce_count = RCE_REGEX.len();
 
         debug!(
-            "WAF initialized with {} SQL, {} XSS, {} Path Traversal, {} Command Injection rules",
-            sql_count, xss_count, path_count, cmd_count
+            "WAF initialized with {} SQL, {} XSS, {} Path Traversal, {} CMD Injection, {} LFI, {} RFI, {} SSTI, {} RCE rules",
+            sql_count,
+            xss_count,
+            path_count,
+            cmd_count,
+            lfi_count,
+            rfi_count,
+            ssti_count,
+            rce_count
         );
 
         Waf {}
@@ -205,6 +318,10 @@ impl Waf {
             ("XSS Attack", "xss", &XSS_REGEX),
             ("Path Traversal", "path_traversal", &PATH_TRAVERSAL_REGEX),
             ("Command Injection", "cmd_injection", &CMD_INJECTION_REGEX),
+            ("LFI", "lfi", &LFI_REGEX),
+            ("RFI", "rfi", &RFI_REGEX),
+            ("SSTI", "ssti", &SSTI_REGEX),
+            ("RCE", "rce", &RCE_REGEX),
         ];
 
         for (attack_name, rule_id, patterns) in rules {

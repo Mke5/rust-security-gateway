@@ -223,6 +223,8 @@ mod tests {
             cert_path: cert_path.to_string(),
             key_path: key_path.to_string(),
             client_ca_path: client_ca_path.to_string(),
+            http2: false,
+            hsts: crate::config::config::HstsConfig::default(),
         }
     }
 

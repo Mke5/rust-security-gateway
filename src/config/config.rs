@@ -52,6 +52,30 @@ pub struct AppConfig {
 
     /// TLS settings for HTTPS termination
     pub tls: TlsConfig,
+
+    /// Logging configuration
+    #[serde(default)]
+    pub logging: LoggingConfig,
+
+    /// Connection pool settings for the HTTP client
+    #[serde(default)]
+    pub pool: PoolConfig,
+
+    /// CORS configuration
+    #[serde(default)]
+    pub cors: CorsConfig,
+
+    /// Authentication configuration (JWT / API key)
+    #[serde(default)]
+    pub auth: AuthConfig,
+
+    /// ACME / Let's Encrypt configuration
+    #[serde(default)]
+    pub acme: AcmeConfig,
+
+    /// Per-route rate limiting overrides
+    #[serde(default)]
+    pub route_rate_limits: Vec<RouteRateLimit>,
 }
 
 // =============================================================================
@@ -148,9 +172,12 @@ impl Default for HealthCheckConfig {
 // =============================================================================
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BackendConfig {
-    /// The full URL of the backend server
-    /// Example: "http://localhost:8080" or "http://api.myapp.com"
+    /// Single backend URL (backward compatible, overridden by urls if set)
     pub url: String,
+
+    /// Multiple backend URLs for load balancing
+    #[serde(default)]
+    pub urls: Vec<String>,
 
     /// How many seconds to wait before giving up on a backend request
     pub timeout_seconds: u64,
@@ -166,6 +193,10 @@ pub struct BackendConfig {
     /// Active health check settings
     #[serde(default)]
     pub health_check: HealthCheckConfig,
+
+    /// Load balancing strategy
+    #[serde(default)]
+    pub load_balancing: LoadBalancingConfig,
 }
 
 // =============================================================================
@@ -236,6 +267,205 @@ pub struct WafConfig {
 }
 
 // =============================================================================
+// HSTS Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct HstsConfig {
+    /// Enable HTTP Strict-Transport-Security header
+    pub enabled: bool,
+    /// Max age in seconds for HSTS (1 year = 31536000)
+    pub max_age: u64,
+    /// Apply HSTS to all subdomains
+    pub include_subdomains: bool,
+    /// Add preload directive
+    pub preload: bool,
+}
+
+impl Default for HstsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_age: 31536000,
+            include_subdomains: true,
+            preload: false,
+        }
+    }
+}
+
+// =============================================================================
+// Connection Pool Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct PoolConfig {
+    /// Maximum number of idle connections per host
+    pub max_idle_per_host: usize,
+    /// Idle connection timeout in seconds
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            max_idle_per_host: 32,
+            idle_timeout_secs: 90,
+        }
+    }
+}
+
+// =============================================================================
+// Load Balancing Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LoadBalancingConfig {
+    /// Strategy: "round_robin" or "least_connections"
+    pub strategy: String,
+}
+
+impl Default for LoadBalancingConfig {
+    fn default() -> Self {
+        Self {
+            strategy: "least_connections".to_string(),
+        }
+    }
+}
+
+// =============================================================================
+// CORS Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CorsConfig {
+    /// Enable CORS middleware
+    pub enabled: bool,
+    /// Allowed origins (e.g. ["https://app.example.com"])
+    pub allowed_origins: Vec<String>,
+    /// Allowed methods (e.g. ["GET", "POST"])
+    pub allowed_methods: Vec<String>,
+    /// Allowed headers
+    pub allowed_headers: Vec<String>,
+    /// Allow credentials (cookies, auth headers)
+    pub allow_credentials: bool,
+    /// Max age for preflight cache in seconds
+    pub max_age_secs: u64,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowed_origins: vec![],
+            allowed_methods: vec![
+                "GET".into(),
+                "POST".into(),
+                "PUT".into(),
+                "DELETE".into(),
+                "PATCH".into(),
+            ],
+            allowed_headers: vec![
+                "Content-Type".into(),
+                "Authorization".into(),
+                "X-Request-ID".into(),
+            ],
+            allow_credentials: true,
+            max_age_secs: 86400,
+        }
+    }
+}
+
+// =============================================================================
+// Auth Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AuthConfig {
+    /// Enable JWT/API-key authentication middleware
+    pub enabled: bool,
+    /// List of API keys (plaintext)
+    pub api_keys: Vec<String>,
+    /// JWKS URL for JWT verification (e.g. https://auth.example.com/.well-known/jwks.json)
+    pub jwks_url: String,
+    /// HMAC secret for JWT verification (HMAC-based JWT only)
+    pub jwt_secret: String,
+    /// Issuer that JWT tokens must match (optional)
+    pub jwt_issuer: String,
+    /// Audience that JWT tokens must match (optional)
+    pub jwt_audience: String,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_keys: vec![],
+            jwks_url: String::new(),
+            jwt_secret: String::new(),
+            jwt_issuer: String::new(),
+            jwt_audience: String::new(),
+        }
+    }
+}
+
+// =============================================================================
+// ACME / Let's Encrypt Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct AcmeConfig {
+    /// Enable automatic TLS certificate provisioning via ACME
+    pub enabled: bool,
+    /// Directory URL (use Let's Encrypt staging for testing)
+    pub directory_url: String,
+    /// Contact email for certificate expiry notifications
+    pub email: String,
+    /// Domains to obtain certificates for
+    pub domains: Vec<String>,
+    /// Path to store ACME account credentials and certificates
+    pub cache_path: String,
+    /// Use Let's Encrypt staging environment (for testing)
+    pub use_staging: bool,
+}
+
+impl Default for AcmeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory_url: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
+            email: String::new(),
+            domains: vec![],
+            cache_path: "acme_cache".to_string(),
+            use_staging: false,
+        }
+    }
+}
+
+// =============================================================================
+// Per-Route Rate Limiting Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RouteRateLimit {
+    /// Route pattern (e.g. "/api/login")
+    pub path: String,
+    /// Max requests per window
+    pub max_requests: u64,
+    /// Window in seconds
+    pub window_seconds: u64,
+}
+
+// =============================================================================
+// Logging Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LoggingConfig {
+    /// Log format: "text" or "json"
+    pub format: String,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            format: "json".to_string(),
+        }
+    }
+}
+
+// =============================================================================
 // TLS Configuration
 // =============================================================================
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -254,6 +484,13 @@ pub struct TlsConfig {
     /// Leave empty to disable mTLS (anonymous clients allowed).
     #[serde(default)]
     pub client_ca_path: String,
+
+    /// Enable HTTP/2 support
+    pub http2: bool,
+
+    /// HSTS configuration
+    #[serde(default)]
+    pub hsts: HstsConfig,
 }
 
 // =============================================================================
@@ -306,6 +543,22 @@ impl AppConfig {
         if !self.backend.url.starts_with("http://") && !self.backend.url.starts_with("https://") {
             errors.push("backend.url must start with http:// or https://".to_string());
         }
+        for u in &self.backend.urls {
+            if !u.starts_with("http://") && !u.starts_with("https://") {
+                errors.push(format!(
+                    "backend.urls entry '{}' must start with http:// or https://",
+                    u
+                ));
+            }
+        }
+        if !["round_robin", "least_connections"]
+            .contains(&self.backend.load_balancing.strategy.as_str())
+        {
+            errors.push(
+                "backend.load_balancing.strategy must be 'round_robin' or 'least_connections'"
+                    .to_string(),
+            );
+        }
         if self.backend.timeout_seconds == 0 {
             errors.push("backend.timeout_seconds must be > 0".to_string());
         }
@@ -355,6 +608,15 @@ impl AppConfig {
                     "tls.client_ca_path '{}' does not exist",
                     self.tls.client_ca_path
                 ));
+            }
+        }
+
+        if self.acme.enabled {
+            if self.acme.email.is_empty() {
+                errors.push("acme.email must not be empty when ACME is enabled".to_string());
+            }
+            if self.acme.domains.is_empty() {
+                errors.push("acme.domains must not be empty when ACME is enabled".to_string());
             }
         }
 
@@ -517,6 +779,13 @@ max_body_size = 512000
 enabled = false
 cert_path = ""
 key_path = ""
+http2 = false
+
+[tls.hsts]
+enabled = false
+max_age = 31536000
+include_subdomains = false
+preload = false
 "#;
 
         let path = "/tmp/test_config.toml";
@@ -664,10 +933,12 @@ impl Default for AppConfig {
             },
             backend: BackendConfig {
                 url: "http://localhost:8080".to_string(),
+                urls: vec![],
                 timeout_seconds: 30,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
                 health_check: HealthCheckConfig::default(),
+                load_balancing: LoadBalancingConfig::default(),
             },
             rate_limit: RateLimitConfig {
                 max_requests: 100,
@@ -693,7 +964,15 @@ impl Default for AppConfig {
                 cert_path: "certs/cert.pem".to_string(),
                 key_path: "certs/key.pem".to_string(),
                 client_ca_path: String::new(),
+                http2: false,
+                hsts: HstsConfig::default(),
             },
+            logging: LoggingConfig::default(),
+            pool: PoolConfig::default(),
+            cors: CorsConfig::default(),
+            auth: AuthConfig::default(),
+            acme: AcmeConfig::default(),
+            route_rate_limits: vec![],
         }
     }
 }

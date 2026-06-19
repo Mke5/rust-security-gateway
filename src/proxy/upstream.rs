@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,10 +61,17 @@ impl CircuitBreakerInner {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoadBalancer {
+    RoundRobin,
+    LeastConnections,
+}
+
 #[derive(Debug)]
 pub struct Upstream {
     pub url: String,
     inner: Mutex<CircuitBreakerInner>,
+    active_connections: AtomicU64,
 }
 
 impl Upstream {
@@ -75,6 +82,7 @@ impl Upstream {
                 failure_threshold,
                 recovery_timeout,
             )),
+            active_connections: AtomicU64::new(0),
         }
     }
 
@@ -88,6 +96,18 @@ impl Upstream {
 
     pub fn record_failure(&self) {
         self.inner.lock().unwrap().record_failure();
+    }
+
+    pub fn acquire(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn release(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    pub fn active_connections(&self) -> u64 {
+        self.active_connections.load(Ordering::Relaxed)
     }
 }
 
@@ -116,6 +136,7 @@ pub struct UpstreamPool {
     upstreams: Vec<Arc<Upstream>>,
     counter: AtomicUsize,
     retry: RetryPolicy,
+    load_balancer: LoadBalancer,
 }
 
 impl UpstreamPool {
@@ -124,6 +145,7 @@ impl UpstreamPool {
         retry: RetryPolicy,
         failure_threshold: u32,
         recovery_timeout: Duration,
+        load_balancer: LoadBalancer,
     ) -> Self {
         let upstreams = urls
             .into_iter()
@@ -134,6 +156,7 @@ impl UpstreamPool {
             upstreams,
             counter: AtomicUsize::new(0),
             retry,
+            load_balancer,
         }
     }
 
@@ -143,13 +166,26 @@ impl UpstreamPool {
         failure_threshold: u32,
         recovery_timeout: Duration,
     ) -> Self {
-        Self::new(vec![url], retry, failure_threshold, recovery_timeout)
+        Self::new(
+            vec![url],
+            retry,
+            failure_threshold,
+            recovery_timeout,
+            LoadBalancer::RoundRobin,
+        )
     }
 
     pub fn pick(&self) -> Option<Arc<Upstream>> {
         if self.upstreams.is_empty() {
             return None;
         }
+        match self.load_balancer {
+            LoadBalancer::RoundRobin => self.pick_round_robin(),
+            LoadBalancer::LeastConnections => self.pick_least_connections(),
+        }
+    }
+
+    fn pick_round_robin(&self) -> Option<Arc<Upstream>> {
         let len = self.upstreams.len();
         for _ in 0..len {
             let idx = self.counter.fetch_add(1, Ordering::Relaxed) % len;
@@ -160,6 +196,24 @@ impl UpstreamPool {
         }
         let idx = self.counter.fetch_add(1, Ordering::Relaxed) % len;
         Some(self.upstreams[idx].clone())
+    }
+
+    fn pick_least_connections(&self) -> Option<Arc<Upstream>> {
+        let mut best: Option<&Arc<Upstream>> = None;
+        let mut best_connections = u64::MAX;
+        for upstream in &self.upstreams {
+            if upstream.is_available() {
+                let conns = upstream.active_connections();
+                if conns < best_connections {
+                    best_connections = conns;
+                    best = Some(upstream);
+                }
+            }
+        }
+        best.cloned().or_else(|| {
+            // All circuits open — fall back to first upstream
+            self.upstreams.first().cloned()
+        })
     }
 
     pub fn retry_policy(&self) -> &RetryPolicy {
@@ -238,6 +292,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             5,
             Duration::from_secs(30),
+            LoadBalancer::RoundRobin,
         );
         let picked = pool.pick().unwrap();
         assert!(picked.url == "http://a:8080" || picked.url == "http://b:8080");
@@ -245,7 +300,13 @@ mod tests {
 
     #[test]
     fn test_upstream_pool_empty() {
-        let pool = UpstreamPool::new(vec![], RetryPolicy::new(2, 100), 5, Duration::from_secs(30));
+        let pool = UpstreamPool::new(
+            vec![],
+            RetryPolicy::new(2, 100),
+            5,
+            Duration::from_secs(30),
+            LoadBalancer::RoundRobin,
+        );
         assert!(pool.is_empty());
         assert!(pool.pick().is_none());
     }
@@ -257,6 +318,7 @@ mod tests {
             RetryPolicy::new(2, 100),
             1,
             Duration::from_secs(60),
+            LoadBalancer::RoundRobin,
         );
         let bad = pool.pick().unwrap();
         bad.record_failure();

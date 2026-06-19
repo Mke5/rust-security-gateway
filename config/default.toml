@@ -1,90 +1,97 @@
 # rust-gateway configuration file
-# This is like the settings panel for our security guard
 
 [server]
-# The address our gateway listens on
-# "0.0.0.0" means "listen on all network interfaces"
-# 3000 is the port number (like a door number on a building)
 host = "0.0.0.0"
 port = 3000
 
 [backend]
-# The URL of the backend server we are protecting and forwarding to
-# When running locally, we use a test backend on port 8080
 url = "http://localhost:8080"
-# How many seconds to wait before giving up on a backend request
+# Multiple backend URLs for load balancing (overrides url if non-empty)
+urls = []
 timeout_seconds = 30
 
 [backend.retry]
-# Maximum number of retries for failed backend requests (0 = no retries)
 max_retries = 2
-# Base delay in milliseconds between retries (doubles each attempt: 100ms, 200ms, 400ms)
 base_delay_ms = 100
 
 [backend.circuit_breaker]
-# Enable circuit breaker to stop sending requests to failing backends
 enabled = true
-# Number of consecutive failures before opening the circuit
 failure_threshold = 5
-# Seconds to wait before trying the backend again (half-open probe)
 recovery_timeout_secs = 30
 
 [backend.health_check]
-# Enable active health checks (background probes)
 enabled = true
-# How often to check each upstream (in seconds)
 interval_secs = 10
-# Timeout for each health check request (in seconds)
 timeout_secs = 5
-# Path to request on the upstream
 path = "/health"
 
+[backend.load_balancing]
+strategy = "least_connections"
+
 [rate_limit]
-# Maximum number of requests allowed per IP per window
 max_requests = 100
-# The time window in seconds (60 = 1 minute)
 window_seconds = 60
 
 [cache]
-# How long to keep cached responses (in seconds)
 ttl_seconds = 300
-# Maximum number of items to store in the cache
 max_items = 1000
 
 [ip_filter]
-# List of IPs that are ALWAYS blocked (blacklist)
 blacklist = ["192.168.1.100", "10.0.0.1"]
-# If whitelist is not empty, ONLY these IPs are allowed
-# Leave empty to allow all IPs (except blacklisted ones)
 whitelist = []
 
 [bot_detection]
-# If a request has no User-Agent header, block it
 block_missing_user_agent = true
-# List of User-Agent strings known to be bots or bad actors
-bad_user_agents = [
-    "sqlmap",
-    "nikto",
-    "masscan",
-    "zgrab",
-    "nmap",
-    "python-requests/2.18",
-    "curl/7.54",
-]
+bad_user_agents = ["sqlmap", "nikto", "masscan", "zgrab", "nmap", "python-requests/2.18", "curl/7.54"]
 
 [waf]
-# Maximum size of request body in bytes (1MB = 1,048,576 bytes)
 max_body_size = 1048576
 
 [tls]
-# Enable TLS/HTTPS termination
-# When enabled, the gateway will serve HTTPS instead of HTTP
 enabled = false
-# Path to the TLS certificate file (PEM format)
 cert_path = "certs/cert.pem"
-# Path to the TLS private key file (PEM format)
 key_path = "certs/key.pem"
-# Path to CA certificate for mutual TLS client verification (PEM format)
-# Set this to enable mTLS — clients must present a certificate signed by this CA
-# Leave empty to allow anonymous clients (standard TLS)
 client_ca_path = ""
+http2 = false
+
+[tls.hsts]
+enabled = false
+max_age = 31536000
+include_subdomains = true
+preload = false
+
+[logging]
+format = "json"
+
+[pool]
+max_idle_per_host = 32
+idle_timeout_secs = 90
+
+[cors]
+enabled = false
+allowed_origins = []
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+allowed_headers = ["Content-Type", "Authorization", "X-Request-ID"]
+allow_credentials = true
+max_age_secs = 86400
+
+[auth]
+enabled = false
+api_keys = []
+jwks_url = ""
+jwt_secret = ""
+jwt_issuer = ""
+jwt_audience = ""
+
+[acme]
+enabled = false
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+email = ""
+domains = []
+cache_path = "acme_cache"
+use_staging = false
+
+[[route_rate_limits]]
+path = "/api/login"
+max_requests = 20
+window_seconds = 60
