@@ -17,7 +17,7 @@ use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 use tracing::{debug, info, warn};
 
-use crate::config::config::TlsConfig;
+use crate::config::TlsConfig;
 
 /// Create a TLS server configuration from the TLS config.
 ///
@@ -224,7 +224,7 @@ mod tests {
             key_path: key_path.to_string(),
             client_ca_path: client_ca_path.to_string(),
             http2: false,
-            hsts: crate::config::config::HstsConfig::default(),
+            hsts: crate::config::HstsConfig::default(),
         }
     }
 

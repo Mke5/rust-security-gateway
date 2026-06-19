@@ -298,13 +298,11 @@ impl Waf {
         ];
 
         for header_name in &headers_to_scan {
-            if let Some(value) = headers.get(*header_name) {
-                if let Ok(value_str) = value.to_str() {
-                    debug!("WAF scanning header: {}", header_name);
-                    if let Err(e) = self.scan(value_str, &format!("header:{}", header_name)) {
-                        return Err(e);
-                    }
-                }
+            if let Some(value) = headers.get(*header_name)
+                && let Ok(value_str) = value.to_str()
+            {
+                debug!("WAF scanning header: {}", header_name);
+                self.scan(value_str, &format!("header:{}", header_name))?;
             }
         }
 

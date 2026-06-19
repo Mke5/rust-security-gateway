@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 mod cache;
 mod config;
 mod metrics;
@@ -27,8 +29,8 @@ use tower_http::{
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use cache::cache::ResponseCache;
-use config::config::AppConfig;
+use cache::ResponseCache;
+use config::AppConfig;
 use metrics::Metrics;
 use middleware::{
     bot_detection::BotDetector, ip_filter::IpFilter, rate_limit::RateLimiter,

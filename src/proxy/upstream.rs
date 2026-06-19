@@ -34,11 +34,11 @@ impl CircuitBreakerInner {
         match self.state {
             CircuitState::Closed => true,
             CircuitState::Open => {
-                if let Some(time) = self.last_failure_time {
-                    if time.elapsed() >= self.recovery_timeout {
-                        self.state = CircuitState::HalfOpen;
-                        return true;
-                    }
+                if let Some(time) = self.last_failure_time
+                    && time.elapsed() >= self.recovery_timeout
+                {
+                    self.state = CircuitState::HalfOpen;
+                    return true;
                 }
                 false
             }

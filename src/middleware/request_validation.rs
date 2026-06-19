@@ -100,12 +100,10 @@ impl RequestValidator {
         // Only check Content-Type for requests that have a body
         let has_body = matches!(method, &Method::POST | &Method::PUT | &Method::PATCH);
 
-        if has_body && body_size > 0 {
-            if headers.get("content-type").is_none() {
-                debug!("Missing Content-Type for {} request with body", method);
-                // Note: we warn but don't block - some APIs work without Content-Type
-                // In strict mode, you'd return an error here
-            }
+        if has_body && body_size > 0 && headers.get("content-type").is_none() {
+            debug!("Missing Content-Type for {} request with body", method);
+            // Note: we warn but don't block - some APIs work without Content-Type
+            // In strict mode, you'd return an error here
         }
 
         Ok(())
