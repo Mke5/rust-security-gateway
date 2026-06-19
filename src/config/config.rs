@@ -49,6 +49,9 @@ pub struct AppConfig {
 
     /// WAF and body validation settings
     pub waf: WafConfig,
+
+    /// TLS settings for HTTPS termination
+    pub tls: TlsConfig,
 }
 
 // =============================================================================
@@ -146,6 +149,21 @@ pub struct WafConfig {
 }
 
 // =============================================================================
+// TLS Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TlsConfig {
+    /// Enable TLS/HTTPS termination
+    pub enabled: bool,
+
+    /// Path to the TLS certificate file (PEM format)
+    pub cert_path: String,
+
+    /// Path to the TLS private key file (PEM format)
+    pub key_path: String,
+}
+
+// =============================================================================
 // Implementation - How to Load the Config
 // =============================================================================
 impl AppConfig {
@@ -212,6 +230,15 @@ impl AppConfig {
         }
         if self.waf.max_body_size == 0 {
             errors.push("waf.max_body_size must be > 0".to_string());
+        }
+
+        if self.tls.enabled {
+            if self.tls.cert_path.is_empty() {
+                errors.push("tls.cert_path must not be empty when TLS is enabled".to_string());
+            }
+            if self.tls.key_path.is_empty() {
+                errors.push("tls.key_path must not be empty when TLS is enabled".to_string());
+            }
         }
 
         if errors.is_empty() {
@@ -359,7 +386,13 @@ bad_user_agents = ["test-bot"]
 
 [waf]
 max_body_size = 512000
+
+[tls]
+enabled = false
+cert_path = ""
+key_path = ""
 "#;
+
         let path = "/tmp/test_config.toml";
         std::fs::write(path, content).unwrap();
         let config = AppConfig::load_from(path).unwrap();
@@ -373,6 +406,7 @@ max_body_size = 512000
         assert_eq!(config.cache.max_items, 500);
         assert_eq!(config.bot_detection.block_missing_user_agent, false);
         assert_eq!(config.waf.max_body_size, 512000);
+        assert!(!config.tls.enabled);
         assert!(config.validate().is_ok());
         std::fs::remove_file(path).unwrap();
     }
@@ -384,6 +418,35 @@ max_body_size = 512000
         let result = AppConfig::load_from(path);
         assert!(result.is_err());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_config_validate_tls_enabled_empty_cert() {
+        let mut config = AppConfig::default();
+        config.tls.enabled = true;
+        config.tls.cert_path = String::new();
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("cert_path")));
+    }
+
+    #[test]
+    fn test_config_validate_tls_enabled_empty_key() {
+        let mut config = AppConfig::default();
+        config.tls.enabled = true;
+        config.tls.key_path = String::new();
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("key_path")));
+    }
+
+    #[test]
+    fn test_config_validate_tls_disabled_no_errors() {
+        let config = AppConfig::default();
+        assert!(!config.tls.enabled);
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -437,6 +500,11 @@ impl Default for AppConfig {
             },
             waf: WafConfig {
                 max_body_size: 1_048_576, // 1 MB
+            },
+            tls: TlsConfig {
+                enabled: false,
+                cert_path: "certs/cert.pem".to_string(),
+                key_path: "certs/key.pem".to_string(),
             },
         }
     }

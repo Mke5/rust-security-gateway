@@ -41,12 +41,20 @@ once_cell = "1"
 # UUID for unique identifiers
 uuid = { version = "1", features = ["v4"] }
 
+# TLS support
+rustls = { version = "0.23", features = ["tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+rustls-pki-types = "1"
+
 # Bytes - efficient byte buffer handling
 bytes = "1"
 
 [dev-dependencies]
 # For writing tests
 tokio-test = "0.4"
+tempfile = "3"
+rcgen = "0.13"
 
 [[bin]]
 name = "rust-gateway"

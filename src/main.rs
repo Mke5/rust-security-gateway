@@ -3,6 +3,7 @@ mod config;
 mod middleware;
 mod proxy;
 mod security;
+mod tls;
 
 // Standard library imports
 use std::net::SocketAddr;
@@ -232,20 +233,32 @@ async fn main() {
         .parse()
         .expect("Invalid server address in config");
 
-    info!("Gateway is LIVE and listening on http://{}", addr);
-    info!("Health endpoint: http://{}/health", addr);
-    info!("Readiness endpoint: http://{}/ready", addr);
-    info!("Liveness endpoint: http://{}/live", addr);
-    info!("Press Ctrl+C to stop the gateway");
+    if config.tls.enabled {
+        info!("TLS is enabled, starting HTTPS server...");
+        info!("Gateway is LIVE and listening on https://{}", addr);
+        info!("Health endpoint: https://{}/health", addr);
+        info!("Readiness endpoint: https://{}/ready", addr);
+        info!("Liveness endpoint: https://{}/live", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("Failed to bind to address. Is the port already in use?");
+        let tls_config = tls::create_tls_config(&config.tls.cert_path, &config.tls.key_path)
+            .expect("Failed to create TLS configuration");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("Server crashed unexpectedly");
+        tls::serve_tls(app, addr, tls_config, shutdown_signal()).await;
+    } else {
+        info!("Gateway is LIVE and listening on http://{}", addr);
+        info!("Health endpoint: http://{}/health", addr);
+        info!("Readiness endpoint: http://{}/ready", addr);
+        info!("Liveness endpoint: http://{}/live", addr);
+
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind to address. Is the port already in use?");
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .expect("Server crashed unexpectedly");
+    }
 }
 
 /// Health endpoint - overall service health

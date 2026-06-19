@@ -51,3 +51,12 @@ bad_user_agents = [
 [waf]
 # Maximum size of request body in bytes (1MB = 1,048,576 bytes)
 max_body_size = 1048576
+
+[tls]
+# Enable TLS/HTTPS termination
+# When enabled, the gateway will serve HTTPS instead of HTTP
+enabled = false
+# Path to the TLS certificate file (PEM format)
+cert_path = "certs/cert.pem"
+# Path to the TLS private key file (PEM format)
+key_path = "certs/key.pem"
