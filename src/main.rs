@@ -22,7 +22,7 @@ use axum::http::StatusCode;
 use serde::Serialize;
 
 // Logging
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Tower HTTP middleware
@@ -462,14 +462,18 @@ async fn handle_request(
         return response;
     }
 
-    if parts.method == axum::http::Method::GET {
-        let cache_key = format!("{}{}", parts.uri.path(), query);
-        if let Some(cached_response) = state.cache.get(&cache_key) {
-            info!("Cache HIT for: {} (request_id: {})", cache_key, request_id);
+    let is_get = parts.method == axum::http::Method::GET;
+    let cache_key = if is_get {
+        let key = format!("{}{}", parts.uri.path(), query);
+        if let Some(cached_response) = state.cache.get(&key) {
+            info!("Cache HIT for: {} (request_id: {})", key, request_id);
             return cached_response;
         }
-        info!("Cache MISS for: {} (request_id: {})", cache_key, request_id);
-    }
+        info!("Cache MISS for: {} (request_id: {})", key, request_id);
+        key
+    } else {
+        String::new()
+    };
 
     // "All checks passed! Forward the request to the real server."
     info!(
@@ -480,7 +484,43 @@ async fn handle_request(
     // Rebuild the request from parts + body and forward to backend
     let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(body_bytes));
 
-    state.proxy_handler.forward(req).await
+    let response = state.proxy_handler.forward(req).await;
+
+    // Cache write-through: store successful GET responses
+    if is_get && response.status() == StatusCode::OK {
+        use http_body_util::BodyExt;
+        let (parts, body) = response.into_parts();
+        match body.collect().await {
+            Ok(collected) => {
+                let bytes = collected.to_bytes();
+                let content_type = parts
+                    .headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+
+                state.cache.set(
+                    cache_key.clone(),
+                    parts.status.as_u16(),
+                    bytes.to_vec(),
+                    content_type,
+                );
+
+                info!(
+                    "Cached response for: {} (request_id: {})",
+                    cache_key, request_id
+                );
+                axum::http::Response::from_parts(parts, axum::body::Body::from(bytes))
+            }
+            Err(e) => {
+                error!("Failed to read response body for caching: {}", e);
+                axum::http::Response::from_parts(parts, axum::body::Body::from(bytes::Bytes::new()))
+            }
+        }
+    } else {
+        response
+    }
 }
 
 fn extract_client_ip(req: &axum::extract::Request) -> String {
