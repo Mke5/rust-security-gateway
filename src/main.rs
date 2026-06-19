@@ -39,6 +39,7 @@ use middleware::{
     request_validation::RequestValidator,
 };
 use proxy::forward::ProxyHandler;
+use proxy::upstream::{RetryPolicy, UpstreamPool};
 use security::waf::Waf;
 
 #[derive(Clone)]
@@ -154,14 +155,43 @@ async fn main() {
         config.cache.ttl_seconds, config.cache.max_items
     );
 
-    // Proxy Handler
-    let proxy_handler = Arc::new(ProxyHandler::new(
+    // Proxy Handler with upstream pool, retries, and circuit breaker
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.backend.timeout_seconds))
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("RustGateway/1.0")
+        .build()
+        .expect("Failed to build HTTP client");
+
+    let retry_policy = RetryPolicy::new(
+        config.backend.retry.max_retries,
+        config.backend.retry.base_delay_ms,
+    );
+
+    let cb = &config.backend.circuit_breaker;
+    let pool = Arc::new(UpstreamPool::from_url(
         config.backend.url.clone(),
-        config.backend.timeout_seconds,
+        retry_policy,
+        if cb.enabled {
+            cb.failure_threshold
+        } else {
+            u32::MAX
+        },
+        Duration::from_secs(cb.recovery_timeout_secs),
     ));
+
+    let proxy_handler = Arc::new(ProxyHandler::new(client, pool));
     info!(
-        "Proxy Handler initialized (backend: {})",
-        config.backend.url
+        "Proxy Handler initialized (backend: {}, retries: {}, circuit breaker: {})",
+        config.backend.url,
+        config.backend.retry.max_retries,
+        if config.backend.circuit_breaker.enabled {
+            "on"
+        } else {
+            "off"
+        },
     );
 
     let state = AppState {
@@ -560,6 +590,20 @@ mod tests {
     }
 
     fn make_test_app() -> Router {
+        use std::time::Duration;
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap();
+
+        let pool = Arc::new(UpstreamPool::from_url(
+            "http://localhost:8080".to_string(),
+            proxy::upstream::RetryPolicy::new(0, 100),
+            10,
+            Duration::from_secs(30),
+        ));
+
         Router::new()
             .route("/health", get(health_handler))
             .route("/ready", get(ready_handler))
@@ -574,7 +618,7 @@ mod tests {
                 request_validator: Arc::new(RequestValidator::new(1_048_576)),
                 waf: Arc::new(Waf::new()),
                 cache: Arc::new(ResponseCache::new(100, 300)),
-                proxy_handler: Arc::new(ProxyHandler::new("http://localhost:8080".to_string(), 30)),
+                proxy_handler: Arc::new(ProxyHandler::new(client, pool)),
                 start_time: Arc::new(std::time::SystemTime::now()),
             })
     }

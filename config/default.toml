@@ -15,6 +15,20 @@ url = "http://localhost:8080"
 # How many seconds to wait before giving up on a backend request
 timeout_seconds = 30
 
+[backend.retry]
+# Maximum number of retries for failed backend requests (0 = no retries)
+max_retries = 2
+# Base delay in milliseconds between retries (doubles each attempt: 100ms, 200ms, 400ms)
+base_delay_ms = 100
+
+[backend.circuit_breaker]
+# Enable circuit breaker to stop sending requests to failing backends
+enabled = true
+# Number of consecutive failures before opening the circuit
+failure_threshold = 5
+# Seconds to wait before trying the backend again (half-open probe)
+recovery_timeout_secs = 30
+
 [rate_limit]
 # Maximum number of requests allowed per IP per window
 max_requests = 100

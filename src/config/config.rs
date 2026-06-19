@@ -69,6 +69,52 @@ pub struct ServerConfig {
 }
 
 // =============================================================================
+// Retry Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of retries for failed backend requests (0 = no retries)
+    pub max_retries: u32,
+
+    /// Base delay in milliseconds between retries (doubles each attempt)
+    pub base_delay_ms: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 2,
+            base_delay_ms: 100,
+        }
+    }
+}
+
+// =============================================================================
+// Circuit Breaker Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct CircuitBreakerConfig {
+    /// Enable circuit breaker for backend upstreams
+    pub enabled: bool,
+
+    /// Number of consecutive failures before opening the circuit
+    pub failure_threshold: u32,
+
+    /// Seconds to wait before trying the backend again
+    pub recovery_timeout_secs: u64,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            failure_threshold: 5,
+            recovery_timeout_secs: 30,
+        }
+    }
+}
+
+// =============================================================================
 // Backend Configuration
 // =============================================================================
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -79,6 +125,14 @@ pub struct BackendConfig {
 
     /// How many seconds to wait before giving up on a backend request
     pub timeout_seconds: u64,
+
+    /// Retry policy for failed backend requests
+    #[serde(default)]
+    pub retry: RetryConfig,
+
+    /// Circuit breaker settings for backend health
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreakerConfig,
 }
 
 // =============================================================================
@@ -215,6 +269,11 @@ impl AppConfig {
         }
         if self.backend.timeout_seconds == 0 {
             errors.push("backend.timeout_seconds must be > 0".to_string());
+        }
+        if self.backend.circuit_breaker.enabled
+            && self.backend.circuit_breaker.failure_threshold == 0
+        {
+            errors.push("backend.circuit_breaker.failure_threshold must be > 0".to_string());
         }
         if self.rate_limit.max_requests == 0 {
             errors.push("rate_limit.max_requests must be > 0".to_string());
@@ -368,6 +427,15 @@ port = 9090
 url = "http://test:3000"
 timeout_seconds = 15
 
+[backend.retry]
+max_retries = 3
+base_delay_ms = 200
+
+[backend.circuit_breaker]
+enabled = true
+failure_threshold = 5
+recovery_timeout_secs = 30
+
 [rate_limit]
 max_requests = 50
 window_seconds = 30
@@ -400,6 +468,10 @@ key_path = ""
         assert_eq!(config.server.port, 9090);
         assert_eq!(config.backend.url, "http://test:3000");
         assert_eq!(config.backend.timeout_seconds, 15);
+        assert_eq!(config.backend.retry.max_retries, 3);
+        assert_eq!(config.backend.retry.base_delay_ms, 200);
+        assert!(config.backend.circuit_breaker.enabled);
+        assert_eq!(config.backend.circuit_breaker.failure_threshold, 5);
         assert_eq!(config.rate_limit.max_requests, 50);
         assert_eq!(config.rate_limit.window_seconds, 30);
         assert_eq!(config.cache.ttl_seconds, 60);
@@ -450,6 +522,17 @@ key_path = ""
     }
 
     #[test]
+    fn test_config_validate_circuit_breaker_zero_threshold() {
+        let mut config = AppConfig::default();
+        config.backend.circuit_breaker.enabled = true;
+        config.backend.circuit_breaker.failure_threshold = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("failure_threshold")));
+    }
+
+    #[test]
     fn test_listen_addr() {
         let config = AppConfig::default();
         assert_eq!(config.listen_addr(), "0.0.0.0:3000");
@@ -481,6 +564,8 @@ impl Default for AppConfig {
             backend: BackendConfig {
                 url: "http://localhost:8080".to_string(),
                 timeout_seconds: 30,
+                retry: RetryConfig::default(),
+                circuit_breaker: CircuitBreakerConfig::default(),
             },
             rate_limit: RateLimitConfig {
                 max_requests: 100,
