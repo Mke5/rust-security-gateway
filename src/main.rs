@@ -182,7 +182,7 @@ async fn main() {
         Duration::from_secs(cb.recovery_timeout_secs),
     ));
 
-    let proxy_handler = Arc::new(ProxyHandler::new(client, pool));
+    let proxy_handler = Arc::new(ProxyHandler::new(client.clone(), pool.clone()));
     info!(
         "Proxy Handler initialized (backend: {}, retries: {}, circuit breaker: {})",
         config.backend.url,
@@ -193,6 +193,25 @@ async fn main() {
             "off"
         },
     );
+
+    // Active health checks — background task that probes upstreams periodically
+    if config.backend.health_check.enabled {
+        let hc = config.backend.health_check.clone();
+        let checker = proxy::health::HealthChecker::new(
+            pool.clone(),
+            client.clone(),
+            hc.interval_secs,
+            hc.timeout_secs,
+            hc.path.clone(),
+        );
+        tokio::spawn(async move {
+            checker.run().await;
+        });
+        info!(
+            "Health checker started (interval: {}s, timeout: {}s, path: {})",
+            hc.interval_secs, hc.timeout_secs, hc.path
+        );
+    }
 
     let state = AppState {
         config: config.clone(),

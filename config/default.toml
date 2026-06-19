@@ -29,6 +29,16 @@ failure_threshold = 5
 # Seconds to wait before trying the backend again (half-open probe)
 recovery_timeout_secs = 30
 
+[backend.health_check]
+# Enable active health checks (background probes)
+enabled = true
+# How often to check each upstream (in seconds)
+interval_secs = 10
+# Timeout for each health check request (in seconds)
+timeout_secs = 5
+# Path to request on the upstream
+path = "/health"
+
 [rate_limit]
 # Maximum number of requests allowed per IP per window
 max_requests = 100

@@ -169,6 +169,10 @@ impl UpstreamPool {
     pub fn is_empty(&self) -> bool {
         self.upstreams.is_empty()
     }
+
+    pub fn upstreams(&self) -> &[Arc<Upstream>] {
+        &self.upstreams
+    }
 }
 
 #[cfg(test)]

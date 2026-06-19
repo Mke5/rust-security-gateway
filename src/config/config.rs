@@ -115,6 +115,35 @@ impl Default for CircuitBreakerConfig {
 }
 
 // =============================================================================
+// Health Check Configuration
+// =============================================================================
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct HealthCheckConfig {
+    /// Enable active health checks
+    pub enabled: bool,
+
+    /// How often to check each upstream (in seconds)
+    pub interval_secs: u64,
+
+    /// Timeout for each health check request (in seconds)
+    pub timeout_secs: u64,
+
+    /// Path to request on the upstream (e.g. "/health" or "/ready")
+    pub path: String,
+}
+
+impl Default for HealthCheckConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: 10,
+            timeout_secs: 5,
+            path: "/health".to_string(),
+        }
+    }
+}
+
+// =============================================================================
 // Backend Configuration
 // =============================================================================
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -133,6 +162,10 @@ pub struct BackendConfig {
     /// Circuit breaker settings for backend health
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
+
+    /// Active health check settings
+    #[serde(default)]
+    pub health_check: HealthCheckConfig,
 }
 
 // =============================================================================
@@ -274,6 +307,17 @@ impl AppConfig {
             && self.backend.circuit_breaker.failure_threshold == 0
         {
             errors.push("backend.circuit_breaker.failure_threshold must be > 0".to_string());
+        }
+        if self.backend.health_check.enabled {
+            if self.backend.health_check.interval_secs == 0 {
+                errors.push("backend.health_check.interval_secs must be > 0".to_string());
+            }
+            if self.backend.health_check.timeout_secs == 0 {
+                errors.push("backend.health_check.timeout_secs must be > 0".to_string());
+            }
+            if self.backend.health_check.path.is_empty() {
+                errors.push("backend.health_check.path must not be empty".to_string());
+            }
         }
         if self.rate_limit.max_requests == 0 {
             errors.push("rate_limit.max_requests must be > 0".to_string());
@@ -533,6 +577,49 @@ key_path = ""
     }
 
     #[test]
+    fn test_config_validate_health_check_interval_zero() {
+        let mut config = AppConfig::default();
+        config.backend.health_check.enabled = true;
+        config.backend.health_check.interval_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("interval_secs")));
+    }
+
+    #[test]
+    fn test_config_validate_health_check_timeout_zero() {
+        let mut config = AppConfig::default();
+        config.backend.health_check.enabled = true;
+        config.backend.health_check.timeout_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("timeout_secs")));
+    }
+
+    #[test]
+    fn test_config_validate_health_check_empty_path() {
+        let mut config = AppConfig::default();
+        config.backend.health_check.enabled = true;
+        config.backend.health_check.path = "".to_string();
+        let result = config.validate();
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("path")));
+    }
+
+    #[test]
+    fn test_config_validate_health_check_disabled_no_errors() {
+        let mut config = AppConfig::default();
+        config.backend.health_check.enabled = false;
+        config.backend.health_check.interval_secs = 0;
+        config.backend.health_check.timeout_secs = 0;
+        config.backend.health_check.path = "".to_string();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn test_listen_addr() {
         let config = AppConfig::default();
         assert_eq!(config.listen_addr(), "0.0.0.0:3000");
@@ -566,6 +653,7 @@ impl Default for AppConfig {
                 timeout_seconds: 30,
                 retry: RetryConfig::default(),
                 circuit_breaker: CircuitBreakerConfig::default(),
+                health_check: HealthCheckConfig::default(),
             },
             rate_limit: RateLimitConfig {
                 max_requests: 100,
