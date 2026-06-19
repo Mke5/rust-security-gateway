@@ -1,5 +1,6 @@
 mod cache;
 mod config;
+mod metrics;
 mod middleware;
 mod proxy;
 mod security;
@@ -9,6 +10,7 @@ mod tls;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 // Axum - our web framework
 use axum::{
@@ -34,6 +36,7 @@ use tower_http::{
 // Our own modules
 use cache::cache::ResponseCache;
 use config::config::AppConfig;
+use metrics::Metrics;
 use middleware::{
     bot_detection::BotDetector, ip_filter::IpFilter, rate_limit::RateLimiter,
     request_validation::RequestValidator,
@@ -52,6 +55,7 @@ pub struct AppState {
     pub waf: Arc<Waf>,
     pub cache: Arc<ResponseCache>,
     pub proxy_handler: Arc<ProxyHandler>,
+    pub metrics: Arc<Metrics>,
     pub start_time: Arc<std::time::SystemTime>,
 }
 
@@ -105,6 +109,10 @@ async fn main() {
     info!("   Forwarding to backend: {}", config.backend.url);
 
     let start_time = Arc::new(std::time::SystemTime::now());
+
+    // Metrics
+    let metrics = Arc::new(Metrics::new().expect("Failed to initialize metrics"));
+    info!("Metrics initialized");
 
     // IP Filter
     let ip_filter = Arc::new(IpFilter::new(
@@ -222,14 +230,16 @@ async fn main() {
         waf,
         cache,
         proxy_handler,
+        metrics,
         start_time,
     };
 
-    // Build router with health endpoints BEFORE the catch-all proxy route
+    // Build router with health/metrics endpoints BEFORE the catch-all proxy route
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/live", get(live_handler))
+        .route("/metrics", get(metrics_handler))
         .route("/", any(handle_request))
         .route("/*path", any(handle_request))
         .layer(
@@ -341,6 +351,24 @@ async fn live_handler() -> Json<LivenessResponse> {
     Json(LivenessResponse { status: "alive" })
 }
 
+/// Metrics endpoint - Prometheus metrics
+async fn metrics_handler(State(state): State<AppState>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    match state.metrics.encode() {
+        Ok(body) => (
+            StatusCode::OK,
+            [("Content-Type", "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to encode metrics: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Metrics error").into_response()
+        }
+    }
+}
+
 /// Handle graceful shutdown on SIGTERM/SIGINT
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -369,8 +397,32 @@ async fn shutdown_signal() {
 }
 
 async fn handle_request(
-    State(state): State<AppState>, // Our "backpack" with all tools
-    req: axum::extract::Request,   // The incoming HTTP request
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+) -> axum::response::Response {
+    let start = Instant::now();
+    let method_string = req.method().to_string();
+
+    let response = handle_request_inner(state.clone(), req).await;
+
+    let status_str = response.status().as_u16().to_string();
+    state
+        .metrics
+        .http_requests_total
+        .with_label_values(&[&method_string, &status_str])
+        .inc();
+    state
+        .metrics
+        .http_request_duration_seconds
+        .with_label_values(&[&method_string])
+        .observe(start.elapsed().as_secs_f64());
+
+    response
+}
+
+async fn handle_request_inner(
+    state: AppState,
+    req: axum::extract::Request,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
@@ -407,6 +459,7 @@ async fn handle_request(
             "RATE LIMITED: {} (too many requests) (request_id: {})",
             ip_str, request_id
         );
+        state.metrics.rate_limit_hits_total.inc();
         return response;
     }
 
@@ -486,9 +539,11 @@ async fn handle_request(
         let key = format!("{}{}", parts.uri.path(), query);
         if let Some(cached_response) = state.cache.get(&key) {
             info!("Cache HIT for: {} (request_id: {})", key, request_id);
+            state.metrics.cache_hits_total.inc();
             return cached_response;
         }
         info!("Cache MISS for: {} (request_id: {})", key, request_id);
+        state.metrics.cache_misses_total.inc();
         key
     } else {
         String::new()
@@ -636,6 +691,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_metrics_endpoint() {
+        let app = make_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_returns_ok() {
+        let app = make_test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn test_liveness_returns_json() {
         use http_body_util::BodyExt;
         let app = make_test_app();
@@ -667,6 +752,7 @@ mod tests {
             .route("/health", get(health_handler))
             .route("/ready", get(ready_handler))
             .route("/live", get(live_handler))
+            .route("/metrics", get(metrics_handler))
             .route("/", any(handle_request))
             .route("/*path", any(handle_request))
             .with_state(AppState {
@@ -678,6 +764,7 @@ mod tests {
                 waf: Arc::new(Waf::new()),
                 cache: Arc::new(ResponseCache::new(100, 300)),
                 proxy_handler: Arc::new(ProxyHandler::new(client, pool)),
+                metrics: Arc::new(Metrics::new().unwrap()),
                 start_time: Arc::new(std::time::SystemTime::now()),
             })
     }

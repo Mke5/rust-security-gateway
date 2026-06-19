@@ -50,6 +50,9 @@ rustls-pki-types = "1"
 # Bytes - efficient byte buffer handling
 bytes = "1"
 
+# Prometheus metrics
+prometheus = { version = "0.13", features = ["process"] }
+
 [dev-dependencies]
 # For writing tests
 tokio-test = "0.4"
