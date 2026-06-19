@@ -1,6 +1,12 @@
 # rust-gateway
 
+[![CI/CD](https://github.com/anomalyco/gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/gateway/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/anomalyco/gateway)](https://github.com/anomalyco/gateway/releases)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-blue)](https://www.rust-lang.org)
+
 A security-hardened HTTP reverse proxy written in Rust. Provides TLS termination, WAF, rate limiting, IP filtering, bot detection, load balancing, circuit breaking, caching, Prometheus metrics, and JSON logging — all configurable via a single TOML file.
+
+Pre-built binaries are available for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), and Windows (x86_64) on the [Releases page](https://github.com/anomalyco/gateway/releases).
 
 ## Features
 
@@ -26,7 +32,7 @@ A security-hardened HTTP reverse proxy written in Rust. Provides TLS termination
 | HTTP/2 upstream | Low | Config field exists (`tls.http2`). Wire h2 connector in reqwest client. |
 | Full SIGHUP state rebuild | Low | Currently reloads config into `RwLock`. Rebuild ip_filter, rate_limiter, bot_detector on SIGHUP. |
 | Integration tests | Medium | Spin up test backends and verify full request lifecycle. |
-| CI/CD pipeline | Medium | GitHub Actions: fmt, clippy, test, build, release. |
+
 
 ## Quick Start
 
@@ -306,10 +312,44 @@ src/
 ├── proxy/                  # Proxy forwarding, upstream pool, health checks
 ├── security/               # WAF (attack pattern detection)
 └── tls.rs                  # TLS termination (rustls)
-
-config/
-└── default.toml            # Default configuration
 ```
+
+## CI/CD
+
+The project uses GitHub Actions for continuous integration and delivery.
+
+### Workflow
+
+| Stage | Description |
+|-------|-------------|
+| `check` | Runs `cargo fmt --check` and `cargo clippy` on every push/PR |
+| `test` | Runs `cargo test` on Linux, macOS, and Windows |
+| `build` | Builds release binaries for all targets (matrix build) |
+| `release` | On tag push (`v*`), creates a GitHub Release with compressed binaries |
+
+### Build Targets
+
+| Target | OS | Arch |
+|--------|----|------|
+| `x86_64-unknown-linux-gnu` | Linux | x86_64 |
+| `aarch64-unknown-linux-gnu` | Linux | ARM64 |
+| `x86_64-apple-darwin` | macOS | Intel |
+| `aarch64-apple-darwin` | macOS | Apple Silicon |
+| `x86_64-pc-windows-msvc` | Windows | x86_64 |
+
+### Creating a Release
+
+```bash
+# Tag the commit
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow automatically:
+1. Builds all targets
+2. Packages binaries (`.tar.gz` for Linux/macOS, `.zip` for Windows)
+3. Creates a GitHub Release with release notes
+4. Attaches all archives as assets
 
 ## Implementation Notes for Future Contributors
 

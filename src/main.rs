@@ -19,13 +19,13 @@ use axum::{
 };
 use serde::Serialize;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tower_http::{
     cors::{Any, CorsLayer},
     request_id::{MakeRequestUuid, SetRequestIdLayer},
     trace::TraceLayer,
 };
+use tracing::{error, info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use cache::cache::ResponseCache;
 use config::config::AppConfig;
@@ -86,10 +86,9 @@ async fn main() {
 
     info!("Starting Rust Security Gateway...");
 
-    let config_path = std::env::var("CONFIG_PATH")
-        .unwrap_or_else(|_| "config/default.toml".to_string());
-    let cfg = AppConfig::load_from(&config_path)
-        .expect("Failed to load configuration");
+    let config_path =
+        std::env::var("CONFIG_PATH").unwrap_or_else(|_| "config/default.toml".to_string());
+    let cfg = AppConfig::load_from(&config_path).expect("Failed to load configuration");
 
     cfg.validate().unwrap_or_else(|errors| {
         panic!(
@@ -324,11 +323,15 @@ async fn main() {
 
     // Add CORS layer if enabled
     if cfg.cors.enabled {
-        let methods: Vec<axum::http::Method> = cfg.cors.allowed_methods
+        let methods: Vec<axum::http::Method> = cfg
+            .cors
+            .allowed_methods
             .iter()
             .filter_map(|m| m.parse().ok())
             .collect();
-        let headers: Vec<axum::http::HeaderName> = cfg.cors.allowed_headers
+        let headers: Vec<axum::http::HeaderName> = cfg
+            .cors
+            .allowed_headers
             .iter()
             .filter_map(|h| h.parse().ok())
             .collect();
@@ -341,7 +344,9 @@ async fn main() {
                 .allow_credentials(cfg.cors.allow_credentials)
                 .max_age(Duration::from_secs(cfg.cors.max_age_secs))
         } else {
-            let origins: Vec<HeaderValue> = cfg.cors.allowed_origins
+            let origins: Vec<HeaderValue> = cfg
+                .cors
+                .allowed_origins
                 .iter()
                 .filter_map(|o| HeaderValue::from_str(o).ok())
                 .collect();
@@ -488,10 +493,15 @@ async fn reload_config(state: &AppState, config_path: &str) {
             // Update the shared config
             let mut cfg = state.config.write().await;
             *cfg = new_config;
-            info!("Configuration hot-reloaded. Some changes may require a restart to take full effect.");
+            info!(
+                "Configuration hot-reloaded. Some changes may require a restart to take full effect."
+            );
         }
         Err(e) => {
-            error!("Failed to reload config: {}. Keeping previous configuration.", e);
+            error!(
+                "Failed to reload config: {}. Keeping previous configuration.",
+                e
+            );
         }
     }
 }
