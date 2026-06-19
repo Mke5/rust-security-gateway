@@ -10,23 +10,51 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::WebPkiClientVerifier;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 use tracing::{debug, info, warn};
 
-/// Create a TLS server configuration from certificate and key files.
-///
-/// Uses TLS 1.3 only. Rejects TLS 1.0, 1.1, and 1.2.
-pub fn create_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConfig>, String> {
-    let certs = load_certs(cert_path)?;
-    let key = load_private_key(key_path)?;
+use crate::config::config::TlsConfig;
 
-    let config = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("Failed to set TLS certificate: {}", e))?;
+/// Create a TLS server configuration from the TLS config.
+///
+/// Uses TLS 1.3 only. If `client_ca_path` is set, enables mutual TLS
+/// requiring client certificates signed by the given CA.
+pub fn create_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>, String> {
+    let certs = load_certs(&config.cert_path)?;
+    let key = load_private_key(&config.key_path)?;
+
+    let builder = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13]);
+
+    let config = if config.client_ca_path.is_empty() {
+        // Standard TLS — no client certificate verification
+        builder
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| format!("Failed to set TLS certificate: {}", e))?
+    } else {
+        // Mutual TLS — verify client certificates against the CA
+        let ca_certs = load_ca_certs(&config.client_ca_path)?;
+
+        let mut root_store = rustls::RootCertStore::empty();
+        for cert in ca_certs {
+            root_store
+                .add(cert)
+                .map_err(|e| format!("Failed to add CA certificate: {}", e))?;
+        }
+
+        let verifier = WebPkiClientVerifier::builder(Arc::new(root_store))
+            .build()
+            .map_err(|e| format!("Failed to build client certificate verifier: {}", e))?;
+
+        builder
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(certs, key)
+            .map_err(|e| format!("Failed to set TLS certificate: {}", e))?
+    };
 
     Ok(Arc::new(config))
 }
@@ -42,6 +70,22 @@ fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, String> {
 
     if certs.is_empty() {
         return Err(format!("No certificates found in '{}'", path));
+    }
+
+    Ok(certs)
+}
+
+/// Load CA certificate(s) for client verification from a PEM file
+fn load_ca_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, String> {
+    let pem = std::fs::read_to_string(path)
+        .map_err(|e| format!("Cannot read CA certificate file '{}': {}", path, e))?;
+
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut pem.as_bytes())
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if certs.is_empty() {
+        return Err(format!("No CA certificates found in '{}'", path));
     }
 
     Ok(certs)
@@ -173,6 +217,15 @@ mod tests {
         (cert.pem(), key_pair.serialize_pem())
     }
 
+    fn make_tls_config(cert_path: &str, key_path: &str, client_ca_path: &str) -> TlsConfig {
+        TlsConfig {
+            enabled: true,
+            cert_path: cert_path.to_string(),
+            key_path: key_path.to_string(),
+            client_ca_path: client_ca_path.to_string(),
+        }
+    }
+
     fn write_test_cert_files() -> (tempfile::NamedTempFile, tempfile::NamedTempFile) {
         let (cert_pem, key_pem) = generate_test_cert_pem();
         let mut cert_file = tempfile::NamedTempFile::new().unwrap();
@@ -212,15 +265,14 @@ mod tests {
     #[test]
     fn test_create_tls_config_valid() {
         let (cert_file, key_file) = write_test_cert_files();
-        let config = create_tls_config(
+        let config = make_tls_config(
             cert_file.path().to_str().unwrap(),
             key_file.path().to_str().unwrap(),
+            "",
         );
-        assert!(config.is_ok());
-
-        // Config was built with TLS 1.3 only by builder_with_protocol_versions
-        // ServerConfig doesn't expose a protocol_versions() query in rustls 0.23
-        let _ = config.unwrap();
+        let result = create_tls_config(&config);
+        assert!(result.is_ok());
+        let _ = result.unwrap();
     }
 
     #[test]
@@ -230,11 +282,13 @@ mod tests {
         let mut key_file = tempfile::NamedTempFile::new().unwrap();
         key_file.write_all(b"not a valid key").unwrap();
 
-        let config = create_tls_config(
+        let config = make_tls_config(
             cert_file.path().to_str().unwrap(),
             key_file.path().to_str().unwrap(),
+            "",
         );
-        assert!(config.is_err());
+        let result = create_tls_config(&config);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -251,5 +305,54 @@ mod tests {
         file.write_all(b"not a key").unwrap();
         let key = load_private_key(file.path().to_str().unwrap());
         assert!(key.is_err());
+    }
+
+    #[test]
+    fn test_load_ca_certs_invalid_path() {
+        let result = load_ca_certs("/nonexistent/ca.pem");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_tls_config_with_mtls() {
+        let (cert_file, key_file) = write_test_cert_files();
+        let (ca_cert_file, _) = write_test_cert_files(); // self-signed cert acts as CA
+
+        let config = make_tls_config(
+            cert_file.path().to_str().unwrap(),
+            key_file.path().to_str().unwrap(),
+            ca_cert_file.path().to_str().unwrap(),
+        );
+        let result = create_tls_config(&config);
+        assert!(result.is_ok());
+        let _ = result.unwrap();
+    }
+
+    #[test]
+    fn test_create_tls_config_mtls_bad_ca_path() {
+        let (cert_file, key_file) = write_test_cert_files();
+
+        let config = make_tls_config(
+            cert_file.path().to_str().unwrap(),
+            key_file.path().to_str().unwrap(),
+            "/nonexistent/ca.pem",
+        );
+        let result = create_tls_config(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_tls_config_mtls_invalid_ca_file() {
+        let (cert_file, key_file) = write_test_cert_files();
+        let mut ca_file = tempfile::NamedTempFile::new().unwrap();
+        ca_file.write_all(b"not a valid CA cert").unwrap();
+
+        let config = make_tls_config(
+            cert_file.path().to_str().unwrap(),
+            key_file.path().to_str().unwrap(),
+            ca_file.path().to_str().unwrap(),
+        );
+        let result = create_tls_config(&config);
+        assert!(result.is_err());
     }
 }

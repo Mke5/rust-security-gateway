@@ -248,6 +248,12 @@ pub struct TlsConfig {
 
     /// Path to the TLS private key file (PEM format)
     pub key_path: String,
+
+    /// Path to CA certificate for mutual TLS client verification (PEM format)
+    /// If set, clients must present a certificate signed by this CA.
+    /// Leave empty to disable mTLS (anonymous clients allowed).
+    #[serde(default)]
+    pub client_ca_path: String,
 }
 
 // =============================================================================
@@ -341,6 +347,14 @@ impl AppConfig {
             }
             if self.tls.key_path.is_empty() {
                 errors.push("tls.key_path must not be empty when TLS is enabled".to_string());
+            }
+            if !self.tls.client_ca_path.is_empty()
+                && !std::path::Path::new(&self.tls.client_ca_path).exists()
+            {
+                errors.push(format!(
+                    "tls.client_ca_path '{}' does not exist",
+                    self.tls.client_ca_path
+                ));
             }
         }
 
@@ -678,6 +692,7 @@ impl Default for AppConfig {
                 enabled: false,
                 cert_path: "certs/cert.pem".to_string(),
                 key_path: "certs/key.pem".to_string(),
+                client_ca_path: String::new(),
             },
         }
     }

@@ -84,3 +84,7 @@ enabled = false
 cert_path = "certs/cert.pem"
 # Path to the TLS private key file (PEM format)
 key_path = "certs/key.pem"
+# Path to CA certificate for mutual TLS client verification (PEM format)
+# Set this to enable mTLS — clients must present a certificate signed by this CA
+# Leave empty to allow anonymous clients (standard TLS)
+client_ca_path = ""

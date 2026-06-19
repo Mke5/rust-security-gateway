@@ -299,8 +299,8 @@ async fn main() {
         info!("Readiness endpoint: https://{}/ready", addr);
         info!("Liveness endpoint: https://{}/live", addr);
 
-        let tls_config = tls::create_tls_config(&config.tls.cert_path, &config.tls.key_path)
-            .expect("Failed to create TLS configuration");
+        let tls_config =
+            tls::create_tls_config(&config.tls).expect("Failed to create TLS configuration");
 
         tls::serve_tls(app, addr, tls_config, shutdown_signal()).await;
     } else {
