@@ -9,6 +9,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use rustls::ServerConfig;
+use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use tokio::net::TcpListener;
@@ -18,6 +19,12 @@ use tower::ServiceExt;
 use tracing::{debug, info, warn};
 
 use crate::config::TlsConfig;
+
+/// Install the default rustls CryptoProvider once.
+/// Required when both `aws-lc-rs` and `ring` features are enabled.
+pub fn init_tls_provider() {
+    CryptoProvider::install_default(rustls::crypto::ring::default_provider()).ok();
+}
 
 /// Create a TLS server configuration from the TLS config.
 ///
@@ -206,6 +213,15 @@ pub async fn serve_tls(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn setup() {
+        INIT.call_once(|| {
+            init_tls_provider();
+        });
+    }
 
     fn generate_test_cert_pem() -> (String, String) {
         let alg = &rcgen::PKCS_ECDSA_P256_SHA256;
@@ -266,6 +282,7 @@ mod tests {
 
     #[test]
     fn test_create_tls_config_valid() {
+        setup();
         let (cert_file, key_file) = write_test_cert_files();
         let config = make_tls_config(
             cert_file.path().to_str().unwrap(),
@@ -317,6 +334,7 @@ mod tests {
 
     #[test]
     fn test_create_tls_config_with_mtls() {
+        setup();
         let (cert_file, key_file) = write_test_cert_files();
         let (ca_cert_file, _) = write_test_cert_files(); // self-signed cert acts as CA
 
@@ -332,6 +350,7 @@ mod tests {
 
     #[test]
     fn test_create_tls_config_mtls_bad_ca_path() {
+        setup();
         let (cert_file, key_file) = write_test_cert_files();
 
         let config = make_tls_config(
@@ -345,6 +364,7 @@ mod tests {
 
     #[test]
     fn test_create_tls_config_mtls_invalid_ca_file() {
+        setup();
         let (cert_file, key_file) = write_test_cert_files();
         let mut ca_file = tempfile::NamedTempFile::new().unwrap();
         ca_file.write_all(b"not a valid CA cert").unwrap();

@@ -77,6 +77,9 @@ struct LivenessResponse {
 
 #[tokio::main]
 async fn main() {
+    // Initialize the default rustls CryptoProvider
+    tls::init_tls_provider();
+
     // Initialize tracing subscriber before loading config to capture startup logs
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "rust_gateway=debug,tower_http=debug".into());
@@ -263,12 +266,15 @@ async fn main() {
         hsts_header,
     };
 
-    // Spawn SIGHUP listener for config reload
-    let reload_state = state.clone();
-    let reload_path = config_path.clone();
-    tokio::spawn(async move {
-        sighup_listener(reload_state, &reload_path).await;
-    });
+    // Spawn SIGHUP listener for config reload (Unix only)
+    #[cfg(unix)]
+    {
+        let reload_state = state.clone();
+        let reload_path = config_path.clone();
+        tokio::spawn(async move {
+            sighup_listener(reload_state, &reload_path).await;
+        });
+    }
 
     // Build router with health/metrics endpoints BEFORE the catch-all proxy route
     let mut app = Router::new()
