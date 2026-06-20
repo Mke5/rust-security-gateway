@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -45,21 +45,14 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            ext: ""
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            ext: ""
             packages: gcc-aarch64-linux-gnu
             linker: aarch64-linux-gnu-gcc
           - target: x86_64-apple-darwin
             os: macos-latest
-            ext: ""
           - target: aarch64-apple-darwin
             os: macos-latest
-            ext: ""
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +69,7 @@ jobs:
       - name: Package binary
         shell: bash
         run: |
-          BIN="target/${{ matrix.target }}/release/rust-gateway${{ matrix.ext }}"
-          PKG="rust-gateway-${{ matrix.target }}${{ matrix.ext }}"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp "$BIN" "$PKG"
-          else
-            cp "$BIN" "$PKG"
-          fi
+          cp "target/${{ matrix.target }}/release/rust-gateway" "rust-gateway-${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
         with:
           name: rust-gateway-${{ matrix.target }}
@@ -105,20 +92,12 @@ jobs:
         shell: bash
         run: |
           for f in rust-gateway-*; do
-            if [[ "$f" == *.exe ]]; then
-              base="${f%.exe}"
-              mv "$f" "rust-gateway.exe"
-              zip "${base}.zip" "rust-gateway.exe"
-              rm "rust-gateway.exe"
-            else
-              mv "$f" "rust-gateway"
-              tar czf "${f}.tar.gz" "rust-gateway"
-              rm "rust-gateway"
-            fi
+            mv "$f" "rust-gateway"
+            tar czf "${f}.tar.gz" "rust-gateway"
+            rm "rust-gateway"
           done
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             rust-gateway-*.tar.gz
-            rust-gateway-*.zip
           generate_release_notes: true
