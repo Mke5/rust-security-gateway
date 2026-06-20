@@ -78,18 +78,6 @@ max_age_secs = 86400
 [auth]
 enabled = false
 api_keys = []
-jwks_url = ""
-jwt_secret = ""
-jwt_issuer = ""
-jwt_audience = ""
-
-[acme]
-enabled = false
-directory_url = "https://acme-v02.api.letsencrypt.org/directory"
-email = ""
-domains = []
-cache_path = "acme_cache"
-use_staging = false
 
 [[route_rate_limits]]
 path = "/api/login"

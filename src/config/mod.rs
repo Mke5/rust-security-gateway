@@ -65,13 +65,9 @@ pub struct AppConfig {
     #[serde(default)]
     pub cors: CorsConfig,
 
-    /// Authentication configuration (JWT / API key)
+    /// Authentication configuration (API keys)
     #[serde(default)]
     pub auth: AuthConfig,
-
-    /// ACME / Let's Encrypt configuration
-    #[serde(default)]
-    pub acme: AcmeConfig,
 
     /// Per-route rate limiting overrides
     #[serde(default)]
@@ -376,50 +372,10 @@ impl Default for CorsConfig {
 // =============================================================================
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct AuthConfig {
-    /// Enable JWT/API-key authentication middleware
+    /// Enable authentication middleware
     pub enabled: bool,
     /// List of API keys (plaintext)
     pub api_keys: Vec<String>,
-    /// JWKS URL for JWT verification (e.g. https://auth.example.com/.well-known/jwks.json)
-    pub jwks_url: String,
-    /// HMAC secret for JWT verification (HMAC-based JWT only)
-    pub jwt_secret: String,
-    /// Issuer that JWT tokens must match (optional)
-    pub jwt_issuer: String,
-    /// Audience that JWT tokens must match (optional)
-    pub jwt_audience: String,
-}
-
-// =============================================================================
-// ACME / Let's Encrypt Configuration
-// =============================================================================
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct AcmeConfig {
-    /// Enable automatic TLS certificate provisioning via ACME
-    pub enabled: bool,
-    /// Directory URL (use Let's Encrypt staging for testing)
-    pub directory_url: String,
-    /// Contact email for certificate expiry notifications
-    pub email: String,
-    /// Domains to obtain certificates for
-    pub domains: Vec<String>,
-    /// Path to store ACME account credentials and certificates
-    pub cache_path: String,
-    /// Use Let's Encrypt staging environment (for testing)
-    pub use_staging: bool,
-}
-
-impl Default for AcmeConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            directory_url: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
-            email: String::new(),
-            domains: vec![],
-            cache_path: "acme_cache".to_string(),
-            use_staging: false,
-        }
-    }
 }
 
 // =============================================================================
@@ -598,15 +554,6 @@ impl AppConfig {
             }
         }
 
-        if self.acme.enabled {
-            if self.acme.email.is_empty() {
-                errors.push("acme.email must not be empty when ACME is enabled".to_string());
-            }
-            if self.acme.domains.is_empty() {
-                errors.push("acme.domains must not be empty when ACME is enabled".to_string());
-            }
-        }
-
         if errors.is_empty() {
             Ok(())
         } else {
@@ -668,7 +615,6 @@ impl Default for AppConfig {
             pool: PoolConfig::default(),
             cors: CorsConfig::default(),
             auth: AuthConfig::default(),
-            acme: AcmeConfig::default(),
             route_rate_limits: vec![],
         }
     }

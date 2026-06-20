@@ -26,8 +26,6 @@ Pre-built binaries are available for Linux (x86_64, aarch64), macOS (x86_64, App
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| ACME / Let's Encrypt auto TLS | Medium | Config skeleton exists (`[acme]`). Implement `acme-lib` or `rustls-acme` for automatic cert provisioning and renewal. |
-| JWT authentication middleware | Medium | Config skeleton exists (`[auth]`). Validate JWTs from `Authorization` header against JWKS or shared secret. |
 | Per-route rate limiting | Medium | Config skeleton exists (`[[route_rate_limits]]`). Apply different rate limits per request path. |
 | HTTP/2 upstream | Low | Config field exists (`tls.http2`). Wire h2 connector in reqwest client. |
 | Full SIGHUP state rebuild | Low | Currently reloads config into `RwLock`. Rebuild ip_filter, rate_limiter, bot_detector on SIGHUP. |
@@ -213,29 +211,14 @@ WAF inspects query strings, request bodies, and headers for SQL injection, XSS, 
 
 ### `[auth]`
 
-Config skeleton for JWT authentication (future):
-
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable JWT auth |
+| `enabled` | bool | `false` | Enable auth |
 | `api_keys` | string[] | `[]` | Static API keys |
-| `jwks_url` | string | `""` | JWKS endpoint URL |
-| `jwt_secret` | string | `""` | HMAC shared secret |
-| `jwt_issuer` | string | `""` | Expected JWT issuer |
-| `jwt_audience` | string | `""` | Expected JWT audience |
 
-### `[acme]`
+## Implementation Notes for Future Contributors
 
-Config skeleton for Let's Encrypt auto TLS (future):
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable ACME |
-| `directory_url` | string | `"https://acme-v02.api.letsencrypt.org/directory"` | ACME directory |
-| `email` | string | `""` | Contact email |
-| `domains` | string[] | `[]` | Domain names for cert |
-| `cache_path` | string | `"acme_cache"` | Cert cache directory |
-| `use_staging` | bool | `false` | Use Let's Encrypt staging |
+### Per-Route Rate Limiting
 
 ## Architecture
 
@@ -352,27 +335,6 @@ The release workflow automatically:
 4. Attaches all archives as assets
 
 ## Implementation Notes for Future Contributors
-
-### ACME Auto TLS
-
-The `[acme]` config section is defined but not wired. To implement:
-
-1. Add the `acme-lib` or `rustls-acme` crate to Cargo.toml
-2. On startup (when `acme.enabled = true`), provision a certificate via ACME
-3. Pass the certificate to `create_tls_config()` instead of loading from disk
-4. Set up automatic renewal (background task that checks expiry)
-5. Fall back to `cert_path`/`key_path` if ACME fails
-
-### JWT Authentication
-
-The `[auth]` config section is defined but the middleware is not implemented. To implement:
-
-1. Add a `jsonwebtoken` or `jwt-simple` crate
-2. Create an `AuthMiddleware` layer that extracts the `Authorization: Bearer <token>` header
-3. Validate the JWT (signature, expiry, issuer, audience)
-4. For JWKS: fetch keys from `jwks_url`, cache them, and use for validation
-5. For static API keys: hash and compare
-6. Return 401 if validation fails
 
 ### Per-Route Rate Limiting
 
